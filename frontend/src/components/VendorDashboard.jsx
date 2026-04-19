@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Package, QrCode, CheckCircle, Clock, TrendingUp, AlertTriangle, User } from 'lucide-react'
+import { useAuth } from '../hooks/useAuth'
 
 function VendorDashboard() {
+  const { user } = useAuth()
   const [stats, setStats] = useState({
     assignedBatches: 0,
     totalUnits: 0,
@@ -11,70 +13,136 @@ function VendorDashboard() {
   const [batches, setBatches] = useState([])
   const [showActivationModal, setShowActivationModal] = useState(false)
   const [selectedBatch, setSelectedBatch] = useState(null)
+  const [masterQrPaste, setMasterQrPaste] = useState('')
+  const [activationMessage, setActivationMessage] = useState('')
+  const [activationError, setActivationError] = useState('')
+  const [activating, setActivating] = useState(false)
 
   const fetchVendorData = async () => {
     try {
-      // Mock data for now
-      setStats({
-        assignedBatches: 5,
-        totalUnits: 2000,
-        activatedUnits: 850,
-        pendingActivation: 1150
-      })
+      // Get vendor ID from logged-in user
+      if (!user || !user.id) {
+        console.error('No vendor user found');
+        return;
+      }
       
-      setBatches([
-        { 
-          id: 1, 
-          batchNumber: 'BATCH-001', 
-          medicineName: 'Paracetamol 500mg', 
-          manufacturer: 'MediCorp',
-          totalUnits: 400, 
-          activatedUnits: 215,
-          status: 'ACTIVATED',
-          masterQR: 'MASTER-BATCH-001-XYZ123',
-          assignedAt: '2024-01-15'
-        },
-        { 
-          id: 2, 
-          batchNumber: 'BATCH-004', 
-          medicineName: 'Vitamin C 500mg', 
-          manufacturer: 'CureWell',
-          totalUnits: 300, 
-          activatedUnits: 0,
-          status: 'PENDING',
-          masterQR: 'MASTER-BATCH-004-ABC456',
-          assignedAt: '2024-01-20'
-        },
-        { 
-          id: 3, 
-          batchNumber: 'BATCH-007', 
-          medicineName: 'Aspirin 100mg', 
-          manufacturer: 'GlobalHealth',
-          totalUnits: 500, 
-          activatedUnits: 350,
-          status: 'ACTIVATED',
-          masterQR: 'MASTER-BATCH-007-DEF789',
-          assignedAt: '2024-01-10'
+      const vendorId = user.id;
+      
+      // Fetch vendor stats
+      const statsResponse = await fetch(`/api/vendors/vendors/${vendorId}/stats`);
+      if (statsResponse.ok) {
+        const statsData = await statsResponse.json();
+        if (statsData.success) {
+          setStats(statsData.stats);
         }
-      ])
+      }
+      
+      // Fetch vendor batches
+      const batchesResponse = await fetch(`/api/vendors/batches/vendor/${vendorId}`);
+      if (batchesResponse.ok) {
+        const batchesData = await batchesResponse.json();
+        if (batchesData.success) {
+          setBatches(batchesData.batches);
+        }
+      }
     } catch (error) {
-      console.error('Error fetching vendor data:', error)
+      console.error('Error fetching vendor data:', error);
+      // Fallback to empty state if API fails
+      setStats({
+        assignedBatches: 0,
+        totalUnits: 0,
+        activatedUnits: 0,
+        pendingActivation: 0
+      });
+      setBatches([]);
     }
   }
 
   useEffect(() => {
     fetchVendorData()
-  }, [])
+  }, [user])
 
   const handleActivateBatch = (batch) => {
     setSelectedBatch(batch)
     setShowActivationModal(true)
   }
 
-  const handleMasterQRScan = (masterToken) => {
-    console.log('Scanning master QR:', masterToken)
-    // This would activate all units in the batch
-    alert(`Master QR ${masterToken} scanned! This will activate all units in the batch.`)
+  const batchUiStatus = (batch) => {
+    if (batch.activation_status && String(batch.activation_status).toLowerCase() === 'active') {
+      return 'ACTIVATED'
+    }
+    if (batch.status) return batch.status
+    return 'PENDING'
+  }
+
+  const batchIsActive = (batch) => batchUiStatus(batch) === 'ACTIVATED'
+
+  const closeActivationModal = () => {
+    setShowActivationModal(false)
+    setMasterQrPaste('')
+    setActivationMessage('')
+    setActivationError('')
+  }
+
+  const handleSubmitMasterActivation = async () => {
+    if (!user?.id) return
+    let qr_data
+    try {
+      qr_data = JSON.parse(masterQrPaste.trim())
+    } catch {
+      setActivationError('Paste the exact JSON text read from the master QR (e.g. from a phone scanner).')
+      return
+    }
+    if (qr_data.batch_id == null || qr_data.group_id != null) {
+      setActivationError('Master QR JSON must include batch_id and must not include group_id.')
+      return
+    }
+
+    setActivating(true)
+    setActivationError('')
+    setActivationMessage('')
+
+    let activation_location = null
+    try {
+      if (navigator.geolocation) {
+        activation_location = await new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => resolve(`${pos.coords.latitude},${pos.coords.longitude}`),
+            () => resolve(null),
+            { timeout: 5000 }
+          )
+        })
+      }
+    } catch {
+      activation_location = null
+    }
+
+    try {
+      const res = await fetch('/api/qr/scan/master', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          qr_data,
+          vendor_user_id: user.id,
+          activation_location
+        })
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setActivationError(data.error || 'Activation failed')
+        return
+      }
+      setActivationMessage(data.message || 'Batch updated.')
+      await fetchVendorData()
+      if (!data.already_active) {
+        setTimeout(() => closeActivationModal(), 1200)
+      }
+    } catch (e) {
+      console.error(e)
+      setActivationError('Network error. Try again.')
+    } finally {
+      setActivating(false)
+    }
   }
 
   const getStatusBadgeClass = (status) => {
@@ -107,7 +175,7 @@ function VendorDashboard() {
           <div className="stat-label">Assigned Batches</div>
         </div>
         <div className="stat-card">
-          <Users className="stat-icon" />
+          <User className="stat-icon" />
           <div className="stat-value">{stats.totalUnits.toLocaleString()}</div>
           <div className="stat-label">Total Units</div>
         </div>
@@ -123,132 +191,99 @@ function VendorDashboard() {
         </div>
       </div>
 
-      {/* Master QR Scanner Section */}
-      <div className="master-qr-section">
-        <h2>Master QR Scanner</h2>
-        <p>Scan master QR codes to activate all units in a batch</p>
-        <button className="btn btn-primary" onClick={() => document.getElementById('master-qr-input').click()}>
-          <QrCode className="btn-icon" />
-          Scan Master QR Code
-        </button>
-        <input
-          id="master-qr-input"
-          type="file"
-          accept="image/*"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files[0]
-            if (file) {
-              // Handle QR file upload
-              console.log('Master QR file selected:', file)
-            }
-          }}
-        />
-      </div>
-
-      {/* Assigned Batches Table */}
+      {/* Batches Table */}
       <div className="batches-section">
-        <h2>Assigned Batches</h2>
-        <div className="table-container">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Batch Number</th>
-                <th>Medicine Name</th>
-                <th>Manufacturer</th>
-                <th>Total Units</th>
-                <th>Activated Units</th>
-                <th>Progress</th>
-                <th>Status</th>
-                <th>Master QR</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {batches.map(batch => (
-                <tr key={batch.id}>
-                  <td>{batch.batchNumber}</td>
-                  <td>{batch.medicineName}</td>
-                  <td>{batch.manufacturer}</td>
-                  <td>{batch.totalUnits}</td>
-                  <td>{batch.activatedUnits}</td>
-                  <td>
-                    <div className="progress-bar">
-                      <div 
-                        className="progress-fill"
-                        style={{ width: `${getActivationProgress(batch.activatedUnits, batch.totalUnits)}%` }}
-                      ></div>
-                      <span className="progress-text">
-                        {getActivationProgress(batch.activatedUnits, batch.totalUnits)}%
+        <h2 className="section-title">Assigned Batches</h2>
+        
+        {batches.length === 0 ? (
+          <div className="empty-state">
+            <Package className="empty-icon" />
+            <h3>No Batches Assigned</h3>
+            <p>You haven't been assigned any medicine batches yet.</p>
+            <p>Contact manufacturers to get batches assigned to your account.</p>
+          </div>
+        ) : (
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Batch Number</th>
+                  <th>Medicine Name</th>
+                  <th>Manufacturer</th>
+                  <th>Total Units</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {batches.map((batch) => (
+                  <tr key={batch.id}>
+                    <td>{batch.batch_number}</td>
+                    <td>{batch.medicine_name}</td>
+                    <td>{batch.manufacturer_name}</td>
+                    <td>{batch.total_units}</td>
+                    <td>
+                      <span className={`status-badge ${getStatusBadgeClass(batchUiStatus(batch))}`}>
+                        {batchUiStatus(batch)}
                       </span>
-                    </div>
-                  </td>
-                  <td>
-                    <span className={`status-badge ${getStatusBadgeClass(batch.status)}`}>
-                      {batch.status}
-                    </span>
-                  </td>
-                  <td>
-                    <code className="master-qr-code">{batch.masterQR}</code>
-                  </td>
-                  <td>
-                    <div className="action-buttons-cell">
-                      {batch.status === 'PENDING' && (
+                    </td>
+                    <td>
+                      {!batchIsActive(batch) && (
                         <button 
-                          className="btn btn-sm btn-primary"
+                          className="btn btn-primary btn-sm"
                           onClick={() => handleActivateBatch(batch)}
                         >
-                          <CheckCircle className="btn-icon" />
-                          Activate
+                          Activate Batch
                         </button>
                       )}
-                      <button 
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => handleMasterQRScan(batch.masterQR)}
-                      >
-                        <QrCode className="btn-icon" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                      {batchIsActive(batch) && (
+                        <span className="text-muted" style={{ fontSize: '0.875rem', color: '#6b7280' }}>Live</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Activation Modal */}
       {showActivationModal && selectedBatch && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h3>Activate Batch - {selectedBatch.batchNumber}</h3>
-            <p>Scan the master QR code or enter it manually to activate all {selectedBatch.totalUnits} units in this batch.</p>
-            
-            <div className="activation-input">
-              <label>Master QR Code:</label>
-              <input
-                type="text"
-                placeholder={selectedBatch.masterQR}
-                className="qr-input"
-              />
+            <h3>Activate Batch</h3>
+            <div className="batch-details">
+              <p><strong>Batch Number:</strong> {selectedBatch.batch_number}</p>
+              <p><strong>Medicine:</strong> {selectedBatch.medicine_name}</p>
+              <p><strong>Units:</strong> {selectedBatch.total_units}</p>
             </div>
-
+            <p>Scan the printed master QR with your phone, then paste the JSON payload below (no images).</p>
+            <textarea
+              className="master-qr-textarea"
+              rows={6}
+              placeholder='{"batch_id":1,"batch_number":"...","medicine_name":"..."}'
+              value={masterQrPaste}
+              onChange={(e) => setMasterQrPaste(e.target.value)}
+            />
+            {activationError && <p className="modal-error">{activationError}</p>}
+            {activationMessage && <p className="modal-success">{activationMessage}</p>}
             <div className="modal-actions">
               <button 
-                className="btn btn-primary"
-                onClick={() => {
-                  handleMasterQRScan(selectedBatch.masterQR)
-                  setShowActivationModal(false)
-                }}
-              >
-                <CheckCircle className="btn-icon" />
-                Activate Batch
-              </button>
-              <button 
                 className="btn btn-secondary"
-                onClick={() => setShowActivationModal(false)}
+                type="button"
+                onClick={closeActivationModal}
+                disabled={activating}
               >
                 Cancel
+              </button>
+              <button 
+                className="btn btn-primary"
+                type="button"
+                onClick={handleSubmitMasterActivation}
+                disabled={activating || !masterQrPaste.trim()}
+              >
+                {activating ? 'Activating…' : 'Submit master QR'}
               </button>
             </div>
           </div>
@@ -258,51 +293,85 @@ function VendorDashboard() {
       <style jsx>{`
         .vendor-dashboard {
           padding: 2rem;
-          min-height: 100vh;
+          max-width: 1200px;
+          margin: 0 auto;
         }
 
         .dashboard-header {
-          text-align: center;
-          margin-bottom: 3rem;
+          margin-bottom: 2rem;
+        }
+
+        .dashboard-title {
+          font-size: 2rem;
+          font-weight: 700;
+          color: #1a1a1a;
+          margin-bottom: 0.5rem;
         }
 
         .dashboard-subtitle {
-          color: var(--text-secondary);
-          font-size: 1.1rem;
-          margin-top: 0.5rem;
+          color: #6b7280;
+          font-size: 1rem;
         }
 
-        .master-qr-section {
-          background: rgba(255, 255, 255, 0.1);
-          border: 1px solid var(--border-green);
-          border-radius: 1rem;
-          padding: 2rem;
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 1.5rem;
           margin-bottom: 2rem;
-          text-align: center;
-          backdrop-filter: blur(10px);
         }
 
-        .master-qr-section h2 {
-          color: var(--text-primary);
-          margin-bottom: 1rem;
+        .stat-card {
+          background: white;
+          padding: 1.5rem;
+          border-radius: 12px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+          display: flex;
+          align-items: center;
+          gap: 1rem;
         }
 
-        .master-qr-section p {
-          color: var(--text-secondary);
-          margin-bottom: 1.5rem;
+        .stat-icon {
+          width: 48px;
+          height: 48px;
+          color: #3b82f6;
+        }
+
+        .stat-value {
+          font-size: 2rem;
+          font-weight: 700;
+          color: #1a1a1a;
+        }
+
+        .stat-label {
+          font-size: 0.875rem;
+          color: #6b7280;
         }
 
         .batches-section {
-          background: rgba(255, 255, 255, 0.1);
-          border: 1px solid var(--border-green);
-          border-radius: 1rem;
-          padding: 2rem;
-          backdrop-filter: blur(10px);
+          background: white;
+          border-radius: 12px;
+          padding: 1.5rem;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
 
-        .batches-section h2 {
-          color: var(--text-primary);
+        .section-title {
+          font-size: 1.5rem;
+          font-weight: 600;
           margin-bottom: 1.5rem;
+          color: #1a1a1a;
+        }
+
+        .empty-state {
+          text-align: center;
+          padding: 3rem;
+          color: #6b7280;
+        }
+
+        .empty-icon {
+          width: 64px;
+          height: 64px;
+          margin-bottom: 1rem;
+          color: #d1d5db;
         }
 
         .table-container {
@@ -312,87 +381,36 @@ function VendorDashboard() {
         .data-table {
           width: 100%;
           border-collapse: collapse;
-          background: rgba(255, 255, 255, 0.05);
-          border-radius: 0.5rem;
-          overflow: hidden;
         }
 
         .data-table th,
         .data-table td {
           padding: 1rem;
           text-align: left;
-          border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+          border-bottom: 1px solid #e5e7eb;
         }
 
         .data-table th {
-          background: rgba(16, 185, 129, 0.1);
-          color: var(--text-primary);
+          background: #f9fafb;
           font-weight: 600;
-        }
-
-        .data-table tbody tr:hover {
-          background: rgba(16, 185, 129, 0.05);
-        }
-
-        .progress-bar {
-          position: relative;
-          width: 100px;
-          height: 20px;
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 10px;
-          overflow: hidden;
-        }
-
-        .progress-fill {
-          height: 100%;
-          background: linear-gradient(90deg, var(--primary-green), var(--light-green));
-          transition: width 0.3s ease;
-        }
-
-        .progress-text {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          font-size: 0.75rem;
-          font-weight: 600;
-          color: var(--text-primary);
+          color: #374151;
         }
 
         .status-badge {
           padding: 0.25rem 0.75rem;
-          border-radius: 1rem;
-          font-size: 0.875rem;
+          border-radius: 9999px;
+          font-size: 0.75rem;
           font-weight: 600;
         }
 
         .status-badge.activated {
-          background: rgba(34, 197, 94, 0.2);
-          color: var(--success);
+          background: #d1fae5;
+          color: #065f46;
         }
 
         .status-badge.pending {
-          background: rgba(245, 158, 11, 0.2);
-          color: var(--warning);
-        }
-
-        .master-qr-code {
-          background: rgba(255, 255, 255, 0.1);
-          padding: 0.25rem 0.5rem;
-          border-radius: 0.25rem;
-          font-family: monospace;
-          font-size: 0.875rem;
-          color: var(--accent-green);
-        }
-
-        .action-buttons-cell {
-          display: flex;
-          gap: 0.5rem;
-        }
-
-        .btn-sm {
-          padding: 0.5rem 1rem;
-          font-size: 0.875rem;
+          background: #fed7aa;
+          color: #92400e;
         }
 
         .modal-overlay {
@@ -401,7 +419,7 @@ function VendorDashboard() {
           left: 0;
           right: 0;
           bottom: 0;
-          background: rgba(0, 0, 0, 0.8);
+          background: rgba(0, 0, 0, 0.5);
           display: flex;
           align-items: center;
           justify-content: center;
@@ -409,51 +427,47 @@ function VendorDashboard() {
         }
 
         .modal-content {
-          background: var(--bg-secondary);
-          border: 1px solid var(--border-green);
-          border-radius: 1rem;
+          background: white;
           padding: 2rem;
+          border-radius: 12px;
           max-width: 500px;
           width: 90%;
-          text-align: center;
         }
 
-        .modal-content h3 {
-          color: var(--text-primary);
-          margin-bottom: 1rem;
-        }
-
-        .modal-content p {
-          color: var(--text-secondary);
-          margin-bottom: 1.5rem;
-        }
-
-        .activation-input {
-          margin-bottom: 1.5rem;
-          text-align: left;
-        }
-
-        .activation-input label {
-          display: block;
-          color: var(--text-secondary);
-          margin-bottom: 0.5rem;
-          font-weight: 500;
-        }
-
-        .qr-input {
-          width: 100%;
-          padding: 0.75rem;
-          background: rgba(255, 255, 255, 0.1);
-          border: 1px solid var(--border-green);
-          border-radius: 0.5rem;
-          color: var(--text-primary);
-          font-family: monospace;
+        .batch-details {
+          background: #f9fafb;
+          padding: 1rem;
+          border-radius: 8px;
+          margin: 1rem 0;
         }
 
         .modal-actions {
           display: flex;
           gap: 1rem;
           justify-content: center;
+        }
+
+        .master-qr-textarea {
+          width: 100%;
+          margin: 1rem 0;
+          padding: 0.75rem;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          font-family: ui-monospace, monospace;
+          font-size: 0.8125rem;
+          box-sizing: border-box;
+        }
+
+        .modal-error {
+          color: #b91c1c;
+          font-size: 0.875rem;
+          margin: 0.5rem 0 0;
+        }
+
+        .modal-success {
+          color: #065f46;
+          font-size: 0.875rem;
+          margin: 0.5rem 0 0;
         }
 
         @media (max-width: 768px) {

@@ -1,56 +1,89 @@
-# Node dependencies
+# --- Dependencies ---
 node_modules/
 
-# Environment variables
+# --- Environment & secrets (never commit real secrets) ---
 .env
-.env.local
-.env.development
-.env.test
-.env.production
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
 
-# Logs
-logs
+# --- Logs & debug ---
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Build folders
+# --- Build & bundler output ---
 dist/
 build/
+out/
+.vite/
+*.tsbuildinfo
 
-# OS files
+# --- Test & coverage ---
+coverage/
+.nyc_output/
+*.lcov
+
+# --- Caches ---
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+.stylelintcache
+*.cache
+
+# --- OS ---
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# IDE files
-.vscode/
+# --- Editors & IDEs ---
 .idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
 
-# Temporary files
+# VS Code — ignore user-local; commit shared snippets/tasks if your team uses them
+.vscode/*
+!.vscode/extensions.json
+
+# --- Temp & scratch ---
 *.tmp
 *.temp
+*.swp
+*~
+*.orig
+*.rej
 
-# Coverage reports
-coverage/
-
-# Runtime data
-pids
+# --- Runtime / misc ---
+pids/
 *.pid
 *.seed
 *.pid.lock
 
-# Database backups
+# --- Database dumps & local DB files ---
 *.sql.backup
 *.dump
-
-# Local database files
 *.db
+*.sqlite
+*.sqlite3
 
-# Python cache (if you add AI service later)
+# --- Python (optional tooling / scripts) ---
 __pycache__/
-*.pyc
+*.py[cod]
+.Python
+venv/
+.venv/
 
-# Mac system files
-.AppleDouble
-.LSOverride
+# --- Misc ---
+*.local

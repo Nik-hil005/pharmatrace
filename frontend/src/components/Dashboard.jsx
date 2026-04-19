@@ -14,53 +14,47 @@ function Dashboard() {
   const [recentActivity, setRecentActivity] = useState([])
 
   useEffect(() => {
-    // Simulate loading dashboard data
     const loadDashboardData = async () => {
-      // Mock data for demonstration
-      setStats({
-        totalBatches: 156,
-        verifiedScans: 2847,
-        suspiciousScans: 23,
-        fakeScans: 8,
-        activeManufacturers: 12,
-        activeVendors: 34
-      })
+      try {
+        const response = await fetch('/api/stats/dashboard')
+        const data = await response.json()
 
-      setRecentActivity([
-        {
-          id: 1,
-          type: 'scan',
-          status: 'VERIFIED',
-          medicine: 'Paracetamol 500mg',
-          time: '2 minutes ago',
-          batch: 'BATCH-2024-001'
-        },
-        {
-          id: 2,
-          type: 'alert',
-          status: 'SUSPICIOUS',
-          medicine: 'Amoxicillin 250mg',
-          time: '15 minutes ago',
-          batch: 'BATCH-2024-002',
-          reason: 'Multiple scans from different locations'
-        },
-        {
-          id: 3,
-          type: 'scan',
-          status: 'FAKE',
-          medicine: 'Ibuprofen 400mg',
-          time: '1 hour ago',
-          batch: 'UNKNOWN'
-        },
-        {
-          id: 4,
-          type: 'batch',
-          status: 'CREATED',
-          medicine: 'Vitamin C 1000mg',
-          time: '2 hours ago',
-          batch: 'BATCH-2024-045'
+        if (response.ok) {
+          setStats(data.stats || {
+            totalBatches: 0,
+            verifiedScans: 0,
+            suspiciousScans: 0,
+            fakeScans: 0,
+            activeManufacturers: 0,
+            activeVendors: 0
+          })
+          setRecentActivity(data.recentActivity || [])
+          return
         }
-      ])
+
+        // Fallback for older backend process not exposing /api/stats/dashboard yet.
+        const [batchesRes, manufacturersRes, vendorsRes] = await Promise.all([
+          fetch('/api/manufacturers/batches'),
+          fetch('/api/manufacturers'),
+          fetch('/api/vendors')
+        ])
+
+        const batchesData = await batchesRes.json()
+        const manufacturersData = await manufacturersRes.json()
+        const vendorsData = await vendorsRes.json()
+
+        setStats({
+          totalBatches: (batchesData.batches || []).length,
+          verifiedScans: 0,
+          suspiciousScans: 0,
+          fakeScans: 0,
+          activeManufacturers: (manufacturersData.manufacturers || []).length,
+          activeVendors: (vendorsData.vendors || []).length
+        })
+        setRecentActivity([])
+      } catch (error) {
+        console.error('Dashboard load error:', error)
+      }
     }
 
     loadDashboardData()
@@ -186,7 +180,7 @@ function Dashboard() {
         </div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .dashboard-content {
           display: grid;
           grid-template-columns: 1fr 1fr;

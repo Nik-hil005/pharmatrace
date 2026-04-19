@@ -1,6 +1,22 @@
 import { useState } from 'react'
-import { Building, Package, Mail, Phone, FileText, User } from 'lucide-react'
+import { Building, Package, Mail, Phone, FileText, User, MapPin, Lock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+
+function validatePasswordRules(password) {
+  if (!password || password.length < 8) {
+    return 'Password must be at least 8 characters'
+  }
+  if (!/[A-Z]/.test(password)) {
+    return 'Password must include at least one uppercase letter'
+  }
+  if (!/[0-9]/.test(password)) {
+    return 'Password must include at least one number'
+  }
+  if (!/[^A-Za-z0-9]/.test(password)) {
+    return 'Password must include at least one special character'
+  }
+  return null
+}
 
 function Registration() {
   const [formData, setFormData] = useState({
@@ -12,8 +28,11 @@ function Registration() {
     licenseNumber: '',
     description: '',
     firstName: '',
-    lastName: ''
+    lastName: '',
+    city: '',
+    password: ''
   })
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
@@ -23,38 +42,108 @@ function Registration() {
       ...formData,
       [e.target.name]: e.target.value
     })
+    setError('')
+  }
+
+  const validateForm = () => {
+    if (!formData.firstName.trim() || !formData.lastName.trim()) {
+      setError('First and last name are required')
+      return false
+    }
+    if (!formData.companyName.trim()) {
+      setError('Company name is required')
+      return false
+    }
+    if (!formData.email.trim() || !formData.email.includes('@')) {
+      setError('Valid email is required')
+      return false
+    }
+    if (!formData.licenseNumber.trim()) {
+      setError('License number is required')
+      return false
+    }
+    if (formData.type === 'VENDOR') {
+      const c = formData.city.trim()
+      if (!c) {
+        setError('City is required')
+        return false
+      }
+      if (c.length < 2) {
+        setError('City must be at least 2 characters')
+        return false
+      }
+      if (!/^[A-Za-z\s-]+$/.test(c)) {
+        setError('City may only contain letters, spaces, and hyphens')
+        return false
+      }
+    }
+    const pwdErr = validatePasswordRules(formData.password)
+    if (pwdErr) {
+      setError(pwdErr)
+      return false
+    }
+    if (formData.password !== confirmPassword) {
+      setError('Passwords do not match')
+      return false
+    }
+    return true
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    if (!validateForm()) return
+
     setLoading(true)
     setError('')
 
+    const role = formData.type === 'VENDOR' ? 'vendor' : 'manufacturer'
+    const fullName = `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim()
+
     try {
-      // Mock API call for registration request
-      const response = await fetch('/api/registration/request', {
+      const response = await fetch('/api/applications/submit', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({
+          fullName,
+          email: formData.email.trim(),
+          phone: formData.phone.trim() || null,
+          companyName: formData.companyName.trim(),
+          licenseNumber: formData.licenseNumber.trim(),
+          address: formData.address.trim() || null,
+          description: formData.description.trim() || null,
+          city: role === 'vendor' ? formData.city.trim() : null,
+          role,
+          password: formData.password
+        })
       })
 
-      const data = await response.json()
+      const raw = await response.text()
+      let data = {}
+      if (raw) {
+        try {
+          data = JSON.parse(raw)
+        } catch {
+          data = {}
+        }
+      }
 
-      if (response.ok) {
-        alert('Registration request submitted successfully! Please wait for admin approval.')
+      if (response.ok && data.success) {
+        alert('Application submitted successfully. Please wait for admin approval.')
         navigate('/login')
       } else {
-        setError(data.error || 'Registration failed')
+        setError(data.error || `Registration failed (${response.status})`)
       }
     } catch (err) {
       console.error('Registration error:', err)
-      setError('An unexpected error occurred')
+      setError('Could not submit application. Please check backend server and try again.')
     } finally {
       setLoading(false)
     }
   }
+
+  const isVendor = formData.type === 'VENDOR'
 
   return (
     <div className="registration-container">
@@ -65,7 +154,6 @@ function Registration() {
         </div>
 
         <form onSubmit={handleSubmit} className="registration-form">
-          {/* Account Type Selection */}
           <div className="form-group">
             <label>Account Type</label>
             <div className="radio-group">
@@ -81,7 +169,7 @@ function Registration() {
                 <span>Manufacturer</span>
                 <p className="radio-description">Create and manage medicine batches</p>
               </label>
-              
+
               <label className="radio-option">
                 <input
                   type="radio"
@@ -97,10 +185,9 @@ function Registration() {
             </div>
           </div>
 
-          {/* User Information */}
           <div className="form-row">
             <div className="form-group">
-              <label htmlFor="firstName">First Name</label>
+              <label htmlFor="firstName">First Name *</label>
               <div className="input-group">
                 <User className="input-icon" />
                 <input
@@ -114,9 +201,9 @@ function Registration() {
                 />
               </div>
             </div>
-            
+
             <div className="form-group">
-              <label htmlFor="lastName">Last Name</label>
+              <label htmlFor="lastName">Last Name *</label>
               <div className="input-group">
                 <User className="input-icon" />
                 <input
@@ -132,9 +219,8 @@ function Registration() {
             </div>
           </div>
 
-          {/* Company Information */}
           <div className="form-group">
-            <label htmlFor="companyName">Company Name</label>
+            <label htmlFor="companyName">Company Name *</label>
             <div className="input-group">
               <Building className="input-icon" />
               <input
@@ -150,7 +236,7 @@ function Registration() {
           </div>
 
           <div className="form-group">
-            <label htmlFor="email">Email Address</label>
+            <label htmlFor="email">Email Address *</label>
             <div className="input-group">
               <Mail className="input-icon" />
               <input
@@ -195,10 +281,27 @@ function Registration() {
             </div>
           </div>
 
+          {isVendor && (
+            <div className="form-group">
+              <label htmlFor="city">City *</label>
+              <div className="input-group">
+                <MapPin className="input-icon" />
+                <input
+                  type="text"
+                  id="city"
+                  name="city"
+                  value={formData.city}
+                  onChange={handleChange}
+                  placeholder="Enter your city"
+                  autoComplete="address-level2"
+                  required
+                />
+              </div>
+            </div>
+          )}
+
           <div className="form-group">
-            <label htmlFor="licenseNumber">
-              License Number
-            </label>
+            <label htmlFor="licenseNumber">License Number *</label>
             <div className="input-group">
               <FileText className="input-icon" />
               <input
@@ -228,6 +331,46 @@ function Registration() {
             </div>
           </div>
 
+          <div className="form-group">
+            <label htmlFor="password">Create Password *</label>
+            <div className="input-group">
+              <Lock className="input-icon" />
+              <input
+                type="password"
+                id="password"
+                name="password"
+                value={formData.password}
+                onChange={handleChange}
+                placeholder="Create a strong password"
+                autoComplete="new-password"
+                required
+              />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="confirmPassword">Confirm Password *</label>
+            <div className="input-group">
+              <Lock className="input-icon" />
+              <input
+                type="password"
+                id="confirmPassword"
+                name="confirmPassword"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value)
+                  setError('')
+                }}
+                placeholder="Re-enter your password"
+                autoComplete="new-password"
+                required
+              />
+            </div>
+            {confirmPassword.length > 0 && formData.password !== confirmPassword && (
+              <p className="field-hint-error">Passwords do not match</p>
+            )}
+          </div>
+
           {error && (
             <div className="error-message">
               <span>{error}</span>
@@ -235,29 +378,31 @@ function Registration() {
           )}
 
           <button type="submit" className="btn btn-primary btn-full" disabled={loading}>
-            {loading ? (
-              <div className="loading"></div>
-            ) : (
-              'Submit Application'
-            )}
+            {loading ? <div className="loading" /> : 'Submit Application'}
           </button>
         </form>
 
         <div className="registration-footer">
           <p>
             Already have an account?
-            <button
-              type="button"
-              className="link-btn"
-              onClick={() => navigate('/login')}
-            >
+            <button type="button" className="link-btn" onClick={() => navigate('/login')}>
               Sign In
+            </button>
+          </p>
+          <p className="apply-alt-links">
+            Or apply directly:{' '}
+            <button type="button" className="link-btn" onClick={() => navigate('/apply/vendor')}>
+              Vendor form
+            </button>
+            {' · '}
+            <button type="button" className="link-btn" onClick={() => navigate('/apply/manufacturer')}>
+              Manufacturer form
             </button>
           </p>
         </div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .registration-container {
           min-height: 100vh;
           display: flex;
@@ -329,6 +474,7 @@ function Registration() {
           width: 1.25rem;
           height: 1.25rem;
           color: var(--text-secondary);
+          pointer-events: none;
         }
 
         .input-group input,
@@ -354,6 +500,17 @@ function Registration() {
         .input-group textarea::placeholder {
           color: var(--text-secondary);
           opacity: 0.6;
+        }
+
+        .field-hint-error {
+          margin: 0;
+          font-size: 0.8125rem;
+          color: var(--error);
+        }
+
+        .apply-alt-links {
+          margin-top: 0.75rem;
+          font-size: 0.85rem;
         }
 
         .radio-group {

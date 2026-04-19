@@ -28,8 +28,12 @@ function Header() {
         <nav style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <ul className={isMenuOpen ? 'nav-open' : ''} style={{ display: 'flex', listStyle: 'none', margin: 0, padding: 0, alignItems: 'center' }}>
             <li><Link to="/" onClick={() => setIsMenuOpen(false)}>Home</Link></li>
-            <li><Link to="/scan" onClick={() => setIsMenuOpen(false)}>Scan</Link></li>
-            <li><Link to="/dashboard" onClick={() => setIsMenuOpen(false)}>Dashboard</Link></li>
+            {user?.role !== 'manufacturer' && (
+              <li><Link to="/scan" onClick={() => setIsMenuOpen(false)}>Scan</Link></li>
+            )}
+            {user?.role !== 'user' && (
+              <li><Link to="/dashboard" onClick={() => setIsMenuOpen(false)}>Dashboard</Link></li>
+            )}
             
             {/* Role-based navigation */}
             {user?.role === 'manufacturer' && (
@@ -88,7 +92,7 @@ function Header() {
         </nav>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .header-actions {
           display: flex;
           align-items: center;

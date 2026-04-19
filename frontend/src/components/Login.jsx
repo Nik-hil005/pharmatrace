@@ -27,8 +27,7 @@ function Login() {
       // Mock authentication bypass for testing
       const mockUsers = [
         { email: 'admin@pharmatrace.com', password: 'Admin@123456', role: 'admin', firstName: 'Admin', lastName: 'User' },
-        { email: 'manufacturer@pharmatrace.com', password: 'Mfg@123456', role: 'manufacturer', firstName: 'John', lastName: 'Smith' },
-        { email: 'vendor@pharmatrace.com', password: 'Vendor@123456', role: 'vendor', firstName: 'Jane', lastName: 'Doe' }
+        { email: 'manufacturer@pharmatrace.com', password: 'Mfg@123456', role: 'manufacturer', firstName: 'John', lastName: 'Smith' }
       ]
 
       const mockUser = mockUsers.find(u => u.email === formData.email && u.password === formData.password)
@@ -78,7 +77,7 @@ function Login() {
       }
 
       if (result.success) {
-        navigate('/dashboard')
+        navigate('/scan')
       } else {
         setError(result.error)
       }

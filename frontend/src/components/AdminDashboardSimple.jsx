@@ -14,82 +14,95 @@ function AdminDashboard() {
   const [notificationIdCounter, setNotificationIdCounter] = useState(1)
 
   useEffect(() => {
-    // Initialize with empty data - no fake database
-    setStats({
-      totalUsers: 0,
-      totalManufacturers: 0,
-      totalVendors: 0,
-      pendingRequests: 0
-    })
-    setPendingRequests([])
-    setNotifications([])
+    fetchDashboardData()
   }, [])
 
-  const handleApproveRequest = (requestId) => {
-    const request = pendingRequests.find(req => req.id === requestId)
-    if (request) {
-      // Remove from pending
-      setPendingRequests(prev => prev.filter(req => req.id !== requestId))
-      
-      // Update stats
-      if (request.type === 'MANUFACTURER') {
-        setStats(prev => ({
-          ...prev,
-          totalManufacturers: prev.totalManufacturers + 1,
-          pendingRequests: prev.pendingRequests - 1,
-          totalUsers: prev.totalUsers + 1
-        }))
-      } else if (request.type === 'VENDOR') {
-        setStats(prev => ({
-          ...prev,
-          totalVendors: prev.totalVendors + 1,
-          pendingRequests: prev.pendingRequests - 1,
-          totalUsers: prev.totalUsers + 1
-        }))
-      }
+  const fetchDashboardData = async () => {
+    try {
+      const [requestsRes, manufacturersRes, vendorsRes] = await Promise.all([
+        fetch('/api/registration/requests?status=PENDING'),
+        fetch('/api/manufacturers'),
+        fetch('/api/vendors')
+      ])
 
-      // Add notification
-      setNotificationIdCounter(prev => {
-        const newId = prev + 1
-        const notification = {
-          id: newId,
-          type: 'success',
-          message: `Approved ${request.type.toLowerCase()} registration for ${request.companyName}`,
-          timestamp: new Date(),
-          icon: CheckCircle
-        }
-        setNotifications(notificationsPrev => [notification, ...notificationsPrev].slice(0, 5))
-        return newId
+      const requestsData = await requestsRes.json()
+      const manufacturersData = await manufacturersRes.json()
+      const vendorsData = await vendorsRes.json()
+
+      const requests = requestsData.requests || []
+      const manufacturers = manufacturersData.manufacturers || []
+      const vendors = vendorsData.vendors || []
+
+      setPendingRequests(requests)
+      setStats({
+        totalUsers: manufacturers.length + vendors.length,
+        totalManufacturers: manufacturers.length,
+        totalVendors: vendors.length,
+        pendingRequests: requests.length
       })
+    } catch (error) {
+      console.error('Error loading admin dashboard data:', error)
     }
   }
 
-  const handleRejectRequest = (requestId) => {
+  const handleApproveRequest = async (requestId) => {
     const request = pendingRequests.find(req => req.id === requestId)
-    if (request) {
-      // Remove from pending
-      setPendingRequests(prev => prev.filter(req => req.id !== requestId))
-      
-      // Update stats
-      setStats(prev => ({
-        ...prev,
-        pendingRequests: prev.pendingRequests - 1
-      }))
+    if (!request) return
 
-      // Add notification
-      setNotificationIdCounter(prev => {
-        const newId = prev + 1
-        const notification = {
-          id: newId,
-          type: 'error',
-          message: `Rejected ${request.type.toLowerCase()} registration for ${request.companyName}`,
-          timestamp: new Date(),
-          icon: XCircle
-        }
-        setNotifications(notificationsPrev => [notification, ...notificationsPrev].slice(0, 5))
-        return newId
+    try {
+      const response = await fetch(`/api/registration/requests/${requestId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
       })
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Approval failed')
+      }
+
+      await fetchDashboardData()
+      addNotification('success', `Approved ${request.request_type.toLowerCase()} application for ${request.company_name}`)
+    } catch (error) {
+      addNotification('error', error.message || 'Failed to approve application')
     }
+  }
+
+  const handleRejectRequest = async (requestId) => {
+    const request = pendingRequests.find(req => req.id === requestId)
+    if (!request) return
+
+    try {
+      const response = await fetch(`/api/registration/requests/${requestId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      })
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Rejection failed')
+      }
+
+      await fetchDashboardData()
+      addNotification('error', `Rejected ${request.request_type.toLowerCase()} application for ${request.company_name}`)
+    } catch (error) {
+      addNotification('error', error.message || 'Failed to reject application')
+    }
+  }
+
+  const addNotification = (type, message) => {
+    setNotificationIdCounter(prev => {
+      const newId = prev + 1
+      const notification = {
+        id: newId,
+        type,
+        message,
+        timestamp: new Date(),
+        icon: type === 'success' ? CheckCircle : XCircle
+      }
+      setNotifications(notificationsPrev => [notification, ...notificationsPrev].slice(0, 5))
+      return newId
+    })
   }
 
   const clearNotifications = () => {
@@ -318,19 +331,19 @@ function AdminDashboard() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ flex: 1 }}>
                     <h3 style={{ color: '#fff', margin: '0 0 0.5rem 0' }}>
-                      {request.companyName}
+                      {request.company_name}
                     </h3>
                     <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
-                      <strong>Type:</strong> {request.type}
+                      <strong>Type:</strong> {request.request_type}
                     </p>
                     <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
                       <strong>Email:</strong> {request.email}
                     </p>
                     <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
-                      <strong>License:</strong> {request.licenseNumber}
+                      <strong>License:</strong> {request.license_number}
                     </p>
                     <p style={{ color: '#ccc', margin: '0' }}>
-                      <strong>Submitted:</strong> {new Date(request.createdAt).toLocaleDateString()}
+                      <strong>Submitted:</strong> {new Date(request.created_at).toLocaleDateString()}
                     </p>
                   </div>
                   

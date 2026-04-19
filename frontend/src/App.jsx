@@ -1,4 +1,4 @@
-import { Routes, Route, Link } from 'react-router-dom'
+import { Routes, Route, Link, Navigate } from 'react-router-dom'
 import { Scan, Shield, Activity, Users, Package, AlertTriangle, Building } from 'lucide-react'
 import './styles.css'
 
@@ -9,10 +9,11 @@ import Dashboard from './components/Dashboard'
 import Header from './components/Header'
 import Login from './components/Login'
 import ManufacturerDashboard from './components/ManufacturerDashboard'
-import VendorDashboard from './components/VendorDashboard'
 import AdminDashboard from './components/AdminDashboard'
 import Registration from './components/Registration'
 import ProtectedRoute from './components/ProtectedRoute'
+import ApplicationForm from './components/ApplicationForm'
+import ApplicationReview from './components/ApplicationReview'
 import { AuthProvider } from './contexts/AuthProvider'
 import { useAuth } from './hooks/useAuth'
 
@@ -39,9 +40,20 @@ function AppContent() {
         
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/scan" element={isAuthenticated ? <QRScanner /> : <Login />} />
-          <Route path="/result" element={isAuthenticated ? <VerificationResult /> : <Login />} />
+          <Route
+            path="/scan"
+            element={
+              isAuthenticated && user?.role === 'manufacturer'
+                ? <Navigate to="/manufacturer" replace />
+                : <QRScanner />
+            }
+          />
+          <Route path="/result" element={<VerificationResult />} />
           <Route path="/dashboard" element={isAuthenticated ? <Dashboard /> : <Login />} />
+          
+          {/* Application Forms */}
+          <Route path="/apply/vendor" element={<ApplicationForm role="vendor" />} />
+          <Route path="/apply/manufacturer" element={<ApplicationForm role="manufacturer" />} />
           
           {/* Role-based routes */}
           <Route path="/manufacturer" element={
@@ -49,14 +61,14 @@ function AppContent() {
               <ManufacturerDashboard />
             </ProtectedRoute>
           } />
-          <Route path="/vendor" element={
-            <ProtectedRoute requiredRole="vendor">
-              <VendorDashboard />
-            </ProtectedRoute>
-          } />
           <Route path="/admin" element={
             <ProtectedRoute requiredRole="admin">
               <AdminDashboard />
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/applications" element={
+            <ProtectedRoute requiredRole="admin">
+              <ApplicationReview />
             </ProtectedRoute>
           } />
           <Route path="/register" element={<Registration />} />
@@ -76,7 +88,7 @@ function App() {
 }
 
 function Home() {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, user } = useAuth()
 
   return (
     <div className="home">
@@ -116,16 +128,17 @@ function Home() {
           
           <div className="cta-buttons">
             {isAuthenticated ? (
-              <>
+              user?.role === 'manufacturer' ? (
+                <Link to="/manufacturer" className="btn btn-primary">
+                  <Building className="btn-icon" />
+                  Open Manufacturer Portal
+                </Link>
+              ) : (
                 <Link to="/scan" className="btn btn-primary">
                   <Scan className="btn-icon" />
                   Start Scanning
                 </Link>
-                <Link to="/dashboard" className="btn btn-secondary">
-                  <Package className="btn-icon" />
-                  Dashboard
-                </Link>
-              </>
+              )
             ) : (
               <>
                 <Link to="/login" className="btn btn-primary">

@@ -1,4 +1,5 @@
-import { useLocation, useNavigate, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { CheckCircle, AlertTriangle, XCircle, ArrowLeft, MapPin, Users, Activity, Shield } from 'lucide-react'
 import VerificationService from '../services/verificationService'
 
@@ -45,9 +46,28 @@ function VerificationResult() {
 
   // Use detailed verification if available, otherwise fall back to basic
   const currentResult = detailedVerification || verificationResult
+  const consumerUnitScan =
+    verificationResult &&
+    typeof verificationResult.verified === 'boolean' &&
+    !detailedVerification
   const medicineData = currentResult.data || currentResult.medicineInfo || {}
 
   const getStatusIcon = () => {
+    if (consumerUnitScan) {
+      if (verificationResult.verified) {
+        if (verificationResult.authenticity === 'CAUTION') {
+          return <AlertTriangle className="status-icon" />
+        }
+        return <CheckCircle className="status-icon" />
+      }
+      if (
+        verificationResult.reason &&
+        verificationResult.reason.toLowerCase().includes('not been activated')
+      ) {
+        return <AlertTriangle className="status-icon" />
+      }
+      return <XCircle className="status-icon" />
+    }
     if (detailedVerification) {
       if (!detailedVerification.success) {
         return detailedVerification.blocked ? <Shield /> : <AlertTriangle />
@@ -68,6 +88,19 @@ function VerificationResult() {
   }
 
   const getStatusClass = () => {
+    if (consumerUnitScan) {
+      if (verificationResult.verified && verificationResult.authenticity === 'CAUTION') {
+        return 'status-caution'
+      }
+      if (verificationResult.verified) return 'status-verified'
+      if (
+        verificationResult.reason &&
+        verificationResult.reason.toLowerCase().includes('not been activated')
+      ) {
+        return 'status-blocked'
+      }
+      return 'status-error'
+    }
     if (detailedVerification) {
       if (!detailedVerification.success) {
         return detailedVerification.blocked ? 'status-blocked' : 'status-error'
@@ -78,6 +111,17 @@ function VerificationResult() {
   }
 
   const getStatusMessage = () => {
+    if (consumerUnitScan) {
+      if (verificationResult.verified) {
+        const auth = verificationResult.authenticity || 'GENUINE'
+        const base =
+          auth === 'CAUTION'
+            ? 'Authenticity: CAUTION. The QR code matches an activated batch, but regional signals suggest extra verification.'
+            : `Authenticity: ${auth}. This pack matches an activated batch in the supply chain.`
+        return base
+      }
+      return verificationResult.reason || 'Unable to verify this medicine.'
+    }
     if (detailedVerification) {
       if (!detailedVerification.success) {
         return detailedVerification.error
@@ -110,12 +154,49 @@ function VerificationResult() {
             {getStatusIcon()}
             
             <h2 className="status-title">
-              {detailedVerification ? (detailedVerification.success ? 'VERIFIED' : 'VERIFICATION FAILED') : currentResult.status}
+              {consumerUnitScan
+                ? verificationResult.verified
+                  ? (verificationResult.authenticity || 'GENUINE')
+                  : 'NOT VERIFIED'
+                : detailedVerification
+                  ? (detailedVerification.success ? 'VERIFIED' : 'VERIFICATION FAILED')
+                  : currentResult.status}
             </h2>
             
             <p className="status-message">
               {getStatusMessage()}
             </p>
+
+            {consumerUnitScan &&
+              verificationResult.verified &&
+              verificationResult.location_check && (
+                <div className="consumer-location-check">
+                  {verificationResult.location_check.status === 'PASS' && (
+                    <div className="region-badge-pass">✓ Verified Region</div>
+                  )}
+                  {verificationResult.location_check.status === 'WARNING' && (
+                    <div className="region-card-warning">
+                      <h4 className="region-warning-title">⚠️ Location Warning</h4>
+                      <p className="region-warning-body">
+                        This medicine was scanned{' '}
+                        <strong>
+                          {verificationResult.location_check.distance_km != null
+                            ? `${verificationResult.location_check.distance_km} km`
+                            : 'far'}
+                        </strong>{' '}
+                        away from the vendor&apos;s authorized city (
+                        <strong>{verificationResult.location_check.vendor_city || '—'}</strong>
+                        ). Exercise caution before consuming and verify with the manufacturer.
+                      </p>
+                    </div>
+                  )}
+                  {verificationResult.location_check.status === 'SKIPPED' && (
+                    <div className="region-note-skipped">
+                      ℹ️ Location check skipped — enable location for full verification
+                    </div>
+                  )}
+                </div>
+              )}
 
             {/* Advanced Location Information */}
             {detailedVerification?.location && (
@@ -134,7 +215,101 @@ function VerificationResult() {
             )}
 
             {/* Medicine Information */}
-            {(currentResult.medicine || detailedVerification?.data) && (
+            {consumerUnitScan && verificationResult.verified && verificationResult.medicine && (
+              <div className="medicine-info">
+                <h3>Medicine Information</h3>
+                <div className="info-row">
+                  <span className="info-label">Name:</span>
+                  <span className="info-value">{verificationResult.medicine.name || 'N/A'}</span>
+                </div>
+                {verificationResult.medicine.dosage && (
+                  <div className="info-row">
+                    <span className="info-label">Dosage:</span>
+                    <span className="info-value">{verificationResult.medicine.dosage}</span>
+                  </div>
+                )}
+                <div className="info-row">
+                  <span className="info-label">Batch Number:</span>
+                  <span className="info-value">{verificationResult.medicine.batch_number || 'N/A'}</span>
+                </div>
+                {verificationResult.medicine.manufacture_date && (
+                  <div className="info-row">
+                    <span className="info-label">Manufacture Date:</span>
+                    <span className="info-value">{verificationResult.medicine.manufacture_date}</span>
+                  </div>
+                )}
+                {verificationResult.medicine.expiry_date && (
+                  <div className="info-row">
+                    <span className="info-label">Expiry Date:</span>
+                    <span className="info-value">{verificationResult.medicine.expiry_date}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {consumerUnitScan && verificationResult.verified && verificationResult.batch && (
+              <div className="medicine-info">
+                <h3>Batch</h3>
+                <div className="info-row">
+                  <span className="info-label">Batch ID:</span>
+                  <span className="info-value">{verificationResult.batch.batch_id}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-label">Total units:</span>
+                  <span className="info-value">{verificationResult.batch.total_units}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-label">Manufacturer:</span>
+                  <span className="info-value">{verificationResult.batch.manufacturer}</span>
+                </div>
+              </div>
+            )}
+
+            {consumerUnitScan && verificationResult.verified && verificationResult.group && (
+              <div className="medicine-info">
+                <h3>Pack group</h3>
+                <div className="info-row">
+                  <span className="info-label">Group ID:</span>
+                  <span className="info-value">{verificationResult.group.group_id}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-label">Group #:</span>
+                  <span className="info-value">{verificationResult.group.group_number}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-label">Unit range:</span>
+                  <span className="info-value">{verificationResult.group.unit_range}</span>
+                </div>
+              </div>
+            )}
+
+            {consumerUnitScan && verificationResult.verified && verificationResult.supply_chain && (
+              <div className="medicine-info">
+                <h3>Supply chain</h3>
+                <div className="info-row">
+                  <span className="info-label">Manufactured by:</span>
+                  <span className="info-value">{verificationResult.supply_chain.manufactured_by}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-label">Assigned vendor:</span>
+                  <span className="info-value">{verificationResult.supply_chain.assigned_vendor}</span>
+                </div>
+                {verificationResult.supply_chain.activated_at && (
+                  <div className="info-row">
+                    <span className="info-label">Activated at:</span>
+                    <span className="info-value">{verificationResult.supply_chain.activated_at}</span>
+                  </div>
+                )}
+                {verificationResult.supply_chain.activation_location && (
+                  <div className="info-row">
+                    <span className="info-label">Activation location:</span>
+                    <span className="info-value">{verificationResult.supply_chain.activation_location}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!consumerUnitScan && (currentResult.medicine || detailedVerification?.data) && (
               <div className="medicine-info">
                 <h3>Medicine Information</h3>
                 <div className="info-row">
@@ -274,6 +449,63 @@ function VerificationResult() {
         .result-card.status-blocked {
           border-color: #ffc107;
           background: rgba(255, 193, 7, 0.1);
+        }
+
+        .result-card.status-caution {
+          border-color: #f59e0b;
+          background: rgba(245, 158, 11, 0.12);
+        }
+
+        .result-card.status-caution .status-icon {
+          color: #f59e0b;
+        }
+
+        .consumer-location-check {
+          margin-bottom: 1.5rem;
+          text-align: left;
+        }
+
+        .region-badge-pass {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          padding: 0.35rem 0.75rem;
+          border-radius: 9999px;
+          font-size: 0.875rem;
+          font-weight: 600;
+          color: #065f46;
+          background: rgba(16, 185, 129, 0.2);
+          border: 1px solid #34d399;
+        }
+
+        .region-card-warning {
+          padding: 1rem 1.25rem;
+          border-radius: 0.75rem;
+          background: rgba(245, 158, 11, 0.15);
+          border: 1px solid #f59e0b;
+          color: var(--text-primary);
+        }
+
+        .region-warning-title {
+          margin: 0 0 0.75rem 0;
+          font-size: 1.1rem;
+          color: #b45309;
+        }
+
+        .region-warning-body {
+          margin: 0;
+          font-size: 0.95rem;
+          line-height: 1.5;
+          color: var(--text-secondary);
+        }
+
+        .region-note-skipped {
+          font-size: 0.875rem;
+          color: #9ca3af;
+          padding: 0.5rem 0.75rem;
+          background: rgba(156, 163, 175, 0.12);
+          border-radius: 0.5rem;
+          border: 1px solid rgba(156, 163, 175, 0.35);
         }
 
         .loading-state {

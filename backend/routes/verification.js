@@ -2,9 +2,23 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 
+async function ensureActivationSchema() {
+    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_vendor_id INTEGER REFERENCES users(id)`);
+    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activation_status VARCHAR(50) DEFAULT 'inactive'`);
+    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_by INTEGER REFERENCES users(id)`);
+    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activation_location TEXT`);
+    await pool.query(`ALTER TABLE batch_groups ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'inactive'`);
+    await pool.query(`ALTER TABLE batch_groups ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ`);
+    await pool.query(
+        `ALTER TABLE batch_groups ADD COLUMN IF NOT EXISTS master_batch_id INTEGER REFERENCES batches(id) ON DELETE CASCADE`
+    );
+}
+
 // Verify medicine by token
 router.post('/verify', async (req, res) => {
     const { token } = req.body;
+    const vendorUserId = req.body.vendor_user_id || null;
     const clientInfo = {
         ip_address: req.ip,
         user_agent: req.get('User-Agent'),
@@ -14,6 +28,188 @@ router.post('/verify', async (req, res) => {
     };
 
     try {
+        await ensureActivationSchema();
+
+        let parsedQrPayload = null;
+        try {
+            parsedQrPayload = JSON.parse(token);
+        } catch (_error) {
+            parsedQrPayload = null;
+        }
+
+        // Master QR activation flow (legacy /api/verify path — prefer POST /api/qr/scan/master).
+        if (parsedQrPayload && parsedQrPayload.batch_id != null && parsedQrPayload.group_id == null) {
+            if (!vendorUserId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'vendor_user_id is required to activate a batch'
+                });
+            }
+
+            const client = await pool.connect();
+            try {
+                await client.query('BEGIN');
+
+                const userResult = await client.query(
+                    `SELECT id, role, is_active
+                     FROM users
+                     WHERE id = $1`,
+                    [vendorUserId]
+                );
+
+                if (
+                    userResult.rows.length === 0 ||
+                    String(userResult.rows[0].role).toLowerCase() !== 'vendor' ||
+                    !userResult.rows[0].is_active
+                ) {
+                    await client.query('ROLLBACK');
+                    return res.status(403).json({
+                        success: false,
+                        error: 'You are not authorized to activate batches'
+                    });
+                }
+
+                const batchResult = await client.query(
+                    `SELECT id, batch_number, medicine_name, assigned_vendor_id, activation_status
+                     FROM batches
+                     WHERE id = $1
+                     FOR UPDATE`,
+                    [parsedQrPayload.batch_id]
+                );
+
+                if (batchResult.rows.length === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(404).json({
+                        success: false,
+                        error: 'Batch not found'
+                    });
+                }
+
+                const batch = batchResult.rows[0];
+                if (!batch.assigned_vendor_id || Number(batch.assigned_vendor_id) !== Number(vendorUserId)) {
+                    await client.query('ROLLBACK');
+                    return res.status(403).json({
+                        success: false,
+                        error: 'You are not the assigned vendor for this batch'
+                    });
+                }
+
+                const statusNorm = String(batch.activation_status || 'inactive').toLowerCase();
+                if (statusNorm === 'active') {
+                    await client.query('COMMIT');
+                    return res.status(200).json({
+                        success: true,
+                        status: 'ACTIVATED',
+                        message: 'Batch is already active',
+                        already_active: true,
+                        batch: {
+                            id: batch.id,
+                            batch_number: batch.batch_number,
+                            medicine_name: batch.medicine_name
+                        }
+                    });
+                }
+
+                await client.query(
+                    `UPDATE batches
+                     SET activation_status = 'active',
+                         activated_at = CURRENT_TIMESTAMP,
+                         activated_by = $1
+                     WHERE id = $2`,
+                    [vendorUserId, batch.id]
+                );
+
+                await client.query(
+                    `UPDATE batch_groups
+                     SET status = 'active',
+                         activated_at = CURRENT_TIMESTAMP
+                     WHERE batch_id = $1`,
+                    [batch.id]
+                );
+
+                await client.query('COMMIT');
+                return res.json({
+                    success: true,
+                    status: 'ACTIVATED',
+                    message: 'Batch activated successfully. All group QRs are now live.',
+                    batch: {
+                        id: batch.id,
+                        batch_number: batch.batch_number,
+                        medicine_name: batch.medicine_name
+                    }
+                });
+            } catch (masterErr) {
+                try {
+                    await client.query('ROLLBACK');
+                } catch (_e) {
+                    /* ignore */
+                }
+                throw masterErr;
+            } finally {
+                client.release();
+            }
+        }
+
+        // Group QR verification flow.
+        if (parsedQrPayload && parsedQrPayload.batch_id && parsedQrPayload.group_id) {
+            const groupResult = await pool.query(
+                `SELECT
+                    bg.id,
+                    bg.group_number,
+                    bg.unit_start,
+                    bg.unit_end,
+                    bg.status as group_status,
+                    b.id as batch_id,
+                    b.batch_number,
+                    b.medicine_name,
+                    b.total_units,
+                    b.activation_status,
+                    b.created_at,
+                    m.name as manufacturer_name,
+                    CONCAT(COALESCE(vu.first_name, ''), CASE WHEN vu.first_name IS NOT NULL AND vu.last_name IS NOT NULL THEN ' ' ELSE '' END, COALESCE(vu.last_name, '')) as vendor_name
+                 FROM batch_groups bg
+                 JOIN batches b ON bg.batch_id = b.id
+                 LEFT JOIN manufacturers m ON b.manufacturer_id = m.id
+                 LEFT JOIN users vu ON b.assigned_vendor_id = vu.id
+                 WHERE bg.id = $1 AND bg.batch_id = $2`,
+                [parsedQrPayload.group_id, parsedQrPayload.batch_id]
+            );
+
+            if (groupResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Group QR not found'
+                });
+            }
+
+            const group = groupResult.rows[0];
+            const groupActive = String(group.group_status || 'inactive').toLowerCase() === 'active';
+            const batchActive = String(group.activation_status || 'inactive').toLowerCase() === 'active';
+            if (!groupActive || !batchActive) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'This medicine has not been activated in the supply chain yet. Do not consume.'
+                });
+            }
+
+            return res.json({
+                success: true,
+                status: 'VERIFIED',
+                message: 'Group QR verified successfully',
+                medicine: {
+                    name: group.medicine_name,
+                    batch_number: group.batch_number,
+                    manufacturer: group.manufacturer_name,
+                    vendor: (group.vendor_name || '').trim() || 'N/A',
+                    total_units: group.total_units,
+                    group_number: group.group_number,
+                    unit_range: `${group.unit_start}-${group.unit_end}`,
+                    activation_status: group.activation_status,
+                    created_at: group.created_at
+                }
+            });
+        }
+
         // Start transaction
         await pool.query('BEGIN');
 
@@ -30,28 +226,15 @@ router.post('/verify', async (req, res) => {
         const unitResult = await pool.query(unitQuery, [token]);
 
         if (unitResult.rows.length === 0) {
-            // Log the fake scan
-            await logScan(null, token, 'FAKE', clientInfo);
-            await pool.query('COMMIT');
-            
-            return res.json({
-                success: true,
-                status: 'FAKE',
-                message: 'Invalid token - medicine not found in system'
+            await pool.query('ROLLBACK');
+            return res.status(404).json({
+                success: false,
+                error: 'Medicine token not found'
             });
         }
 
         const unit = unitResult.rows[0];
-        let scanResult = 'VERIFIED';
-        let alerts = [];
-
-        // Check for anomalies
-        const anomalies = await detectScanAnomalies(unit, clientInfo);
-        
-        if (anomalies.length > 0) {
-            scanResult = 'SUSPICIOUS';
-            alerts = anomalies;
-        }
+        const scanResult = 'VERIFIED';
 
         // Update unit scan count and first scanned time
         const updateUnitQuery = `
@@ -64,11 +247,6 @@ router.post('/verify', async (req, res) => {
 
         // Log the scan
         const scanRecord = await logScan(unit.id, token, scanResult, clientInfo);
-
-        // Create alerts if any anomalies detected
-        for (const alert of alerts) {
-            await createAlert(scanRecord.id, unit.id, alert.type, alert.description, alert.severity);
-        }
 
         // Commit transaction
         await pool.query('COMMIT');
@@ -84,7 +262,6 @@ router.post('/verify', async (req, res) => {
                 expiry_date: unit.expiry_date,
                 scan_count: parseInt(unit.scan_count) + 1
             },
-            alerts: alerts,
             scan_time: scanRecord.scan_time
         });
 
@@ -97,84 +274,6 @@ router.post('/verify', async (req, res) => {
         });
     }
 });
-
-// Detect scan anomalies
-async function detectScanAnomalies(unit, clientInfo) {
-    const anomalies = [];
-
-    // Check if unit is activated
-    if (unit.status !== 'ACTIVATED') {
-        anomalies.push({
-            type: 'PRE_ACTIVATION_SCAN',
-            description: 'Unit scanned before batch activation',
-            severity: 'HIGH'
-        });
-    }
-
-    // Check for excessive scans (more than 5 scans might be suspicious)
-    if (unit.scan_count >= 5) {
-        anomalies.push({
-            type: 'EXCESSIVE_SCANS',
-            description: `Unit scanned ${unit.scan_count + 1} times`,
-            severity: 'MEDIUM'
-        });
-    }
-
-    // Check for expired medicine
-    if (unit.expiry_date && new Date(unit.expiry_date) < new Date()) {
-        anomalies.push({
-            type: 'EXPIRED_MEDICINE',
-            description: 'Medicine has expired',
-            severity: 'HIGH'
-        });
-    }
-
-    // Check for location anomalies if GPS data available
-    if (clientInfo.gps_lat && clientInfo.gps_lng) {
-        const recentScansQuery = `
-            SELECT gps_lat, gps_lng, scan_time
-            FROM scans 
-            WHERE unit_id = $1 
-            AND gps_lat IS NOT NULL 
-            AND gps_lng IS NOT NULL
-            AND scan_time > NOW() - INTERVAL '24 hours'
-            ORDER BY scan_time DESC
-            LIMIT 1
-        `;
-        const recentScans = await pool.query(recentScansQuery, [unit.id]);
-
-        if (recentScans.rows.length > 0) {
-            const lastScan = recentScans.rows[0];
-            const distance = calculateDistance(
-                clientInfo.gps_lat, clientInfo.gps_lng,
-                lastScan.gps_lat, lastScan.gps_lng
-            );
-
-            // If scans are more than 100km apart within 24 hours, it's suspicious
-            if (distance > 100) {
-                anomalies.push({
-                    type: 'LOCATION_ANOMALY',
-                    description: `Unit scanned ${Math.round(distance)}km from previous location within 24 hours`,
-                    severity: 'HIGH'
-                });
-            }
-        }
-    }
-
-    return anomalies;
-}
-
-// Calculate distance between two GPS coordinates (in kilometers)
-function calculateDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371; // Earth's radius in kilometers
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-}
 
 // Log scan to database
 async function logScan(unitId, token, result, clientInfo) {
@@ -191,18 +290,6 @@ async function logScan(unitId, token, result, clientInfo) {
     
     const result2 = await pool.query(query, values);
     return result2.rows[0];
-}
-
-// Create alert in database
-async function createAlert(scanId, unitId, alertType, description, severity) {
-    const query = `
-        INSERT INTO scan_alerts (scan_id, unit_id, alert_type, description, severity)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING *
-    `;
-    const values = [scanId, unitId, alertType, description, severity];
-    
-    await pool.query(query, values);
 }
 
 // Get scan history for a unit
@@ -229,34 +316,6 @@ router.get('/units/:token/scans', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to retrieve scan history'
-        });
-    }
-});
-
-// Get alerts for a unit
-router.get('/units/:token/alerts', async (req, res) => {
-    const { token } = req.params;
-
-    try {
-        const query = `
-            SELECT sa.*, s.scan_time
-            FROM scan_alerts sa
-            JOIN scans s ON sa.scan_id = s.id
-            WHERE sa.unit_id = (SELECT id FROM units WHERE token = $1)
-            ORDER BY sa.created_at DESC
-        `;
-        const result = await pool.query(query, [token]);
-
-        res.json({
-            success: true,
-            alerts: result.rows
-        });
-
-    } catch (error) {
-        console.error('Error getting alerts:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to retrieve alerts'
         });
     }
 });

@@ -57,6 +57,35 @@ function QRScanner() {
     setIsScanning(false)
   }
 
+  const deviceInfo = () => ({
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    timestamp: new Date().toISOString()
+  })
+
+  const getConsumerScanPosition = (timeoutMs = 8000) =>
+    new Promise((resolve) => {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        resolve(null)
+        return
+      }
+      const timer = setTimeout(() => resolve(null), timeoutMs)
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          clearTimeout(timer)
+          resolve({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude
+          })
+        },
+        () => {
+          clearTimeout(timer)
+          resolve(null)
+        },
+        { enableHighAccuracy: false, timeout: timeoutMs, maximumAge: 300000 }
+      )
+    })
+
   const handleScanSuccess = async (result) => {
     if (isProcessing) return
     
@@ -70,23 +99,43 @@ function QRScanner() {
         : token.replace(/^(https?:\/\/[^/]+\/verify\?token=)/, '')
       
       setScanResult(cleanToken)
-      
-      const response = await fetch('http://localhost:5000/api/verify', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          token: cleanToken,
-          gps_lat: null, // Could be obtained from browser geolocation
-          gps_lng: null,
-          device_info: {
-            userAgent: navigator.userAgent,
-            platform: navigator.platform,
-            timestamp: new Date().toISOString()
-          }
-        }),
-      })
+
+      let parsedQr = null
+      try {
+        parsedQr = JSON.parse(cleanToken)
+      } catch {
+        parsedQr = null
+      }
+
+      const isGroupUnitQr =
+        parsedQr &&
+        typeof parsedQr === 'object' &&
+        parsedQr.batch_id != null &&
+        parsedQr.group_id != null
+
+      const geo = isGroupUnitQr ? await getConsumerScanPosition() : null
+      const unitScanBody = {
+        qr_data: parsedQr,
+        device_info: deviceInfo(),
+        ...(geo ? { latitude: geo.latitude, longitude: geo.longitude } : {})
+      }
+
+      const response = isGroupUnitQr
+        ? await fetch('/api/qr/scan/unit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(unitScanBody)
+          })
+        : await fetch('/api/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              token: cleanToken,
+              gps_lat: null,
+              gps_lng: null,
+              device_info: deviceInfo()
+            })
+          })
 
       const verificationResult = await response.json()
       
@@ -130,13 +179,36 @@ function QRScanner() {
       setScanResult(token)
       setIsProcessing(true)
 
-      const response = await fetch('http://localhost:5000/api/verify', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ token }),
-      })
+      let parsedQr = null
+      try {
+        parsedQr = JSON.parse(token.trim())
+      } catch {
+        parsedQr = null
+      }
+      const isGroupUnitQr =
+        parsedQr &&
+        typeof parsedQr === 'object' &&
+        parsedQr.batch_id != null &&
+        parsedQr.group_id != null
+
+      const geo = isGroupUnitQr ? await getConsumerScanPosition() : null
+      const unitScanBody = {
+        qr_data: parsedQr,
+        device_info: deviceInfo(),
+        ...(geo ? { latitude: geo.latitude, longitude: geo.longitude } : {})
+      }
+
+      const response = isGroupUnitQr
+        ? await fetch('/api/qr/scan/unit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(unitScanBody)
+          })
+        : await fetch('/api/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          })
 
       const verificationResult = await response.json()
       navigate('/result', { state: { verificationResult } })

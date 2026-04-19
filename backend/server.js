@@ -14,17 +14,23 @@ app.use(express.json())
 const authRoutes = require('./routes/auth')
 const manufacturersRoutes = require('./routes/manufacturers')
 const manufacturersCRUDRoutes = require('./routes/manufacturers_crud')
-const vendorsRoutes = require('./routes/vendors')
 const vendorsCRUDRoutes = require('./routes/vendors_crud')
 const verificationRoutes = require('./routes/verification')
+const registrationRoutes = require('./routes/registration')
+const statsRoutes = require('./routes/stats')
+const applicationsRoutes = require('./routes/applications')
+const qrRoutes = require('./routes/qr')
 
 // API Routes
 app.use('/api/auth', authRoutes)
-app.use('/api/manufacturers', manufacturersCRUDRoutes)
 app.use('/api/manufacturers', manufacturersRoutes)
+app.use('/api/manufacturers', manufacturersCRUDRoutes)
 app.use('/api/vendors', vendorsCRUDRoutes)
-app.use('/api/vendors', vendorsRoutes)
+app.use('/api/qr', qrRoutes)
 app.use('/api', verificationRoutes)
+app.use('/api/registration', registrationRoutes)
+app.use('/api/stats', statsRoutes)
+app.use('/api/applications', applicationsRoutes)
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -44,6 +50,8 @@ app.get('/', (req, res) => {
             manufacturers: '/api/manufacturers',
             vendors: '/api/vendors',
             verification: '/api/verify',
+            qr_master: '/api/qr/scan/master',
+            qr_unit: '/api/qr/scan/unit',
             health: '/health'
         }
     })

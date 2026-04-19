@@ -23,7 +23,7 @@ CREATE TABLE vendor_users (
 );
 
 -- Registration requests for manufacturers and vendors
-CREATE TABLE registration_requests (
+CREATE TABLE IF NOT EXISTS registration_requests (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     request_type VARCHAR(50) NOT NULL, -- MANUFACTURER, VENDOR
@@ -41,6 +41,9 @@ CREATE TABLE registration_requests (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS first_name VARCHAR(100);
+ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS last_name VARCHAR(100);
+
 -- Master QR codes for batch activation
 CREATE TABLE master_qr_codes (
     id SERIAL PRIMARY KEY,
@@ -53,6 +56,30 @@ CREATE TABLE master_qr_codes (
     activated_by INTEGER REFERENCES users(id), -- User who activated (vendor)
     expires_at TIMESTAMP
 );
+
+-- Batch-level and group-level QR storage for PDF downloads
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS master_qr_code TEXT;
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_vendor_id INTEGER REFERENCES users(id);
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS activation_status VARCHAR(50) DEFAULT 'inactive';
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP;
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_by INTEGER REFERENCES users(id);
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP;
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_by INTEGER REFERENCES users(id);
+
+CREATE TABLE IF NOT EXISTS batch_groups (
+    id SERIAL PRIMARY KEY,
+    batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    group_number INTEGER NOT NULL,
+    unit_start INTEGER NOT NULL,
+    unit_end INTEGER NOT NULL,
+    group_qr_code TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'inactive',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(batch_id, group_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_groups_batch_id ON batch_groups(batch_id);
 
 -- Update batches table to add manufacturer assignment
 ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_by INTEGER REFERENCES users(id); -- Admin who assigned batch to vendor
@@ -68,6 +95,24 @@ CREATE INDEX idx_manufacturer_users_manufacturer_id ON manufacturer_users(manufa
 CREATE INDEX idx_vendor_users_user_id ON vendor_users(user_id);
 CREATE INDEX idx_vendor_users_vendor_id ON vendor_users(vendor_id);
 CREATE INDEX idx_registration_requests_status ON registration_requests(status);
+
+-- Vendor application / profile: city (required for vendor applications via API)
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS city VARCHAR(150);
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS city VARCHAR(150);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(150);
+
+-- Consumer scan regional check + vendor geocode cache
+ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS scanned_latitude DOUBLE PRECISION;
+ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS scanned_longitude DOUBLE PRECISION;
+ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS scanned_city VARCHAR(255);
+ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS vendor_city VARCHAR(255);
+ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS distance_km DOUBLE PRECISION;
+ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS location_status VARCHAR(20);
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_lat DOUBLE PRECISION;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_lon DOUBLE PRECISION;
+
+-- Application registration password (bcrypt hash only)
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
 CREATE INDEX idx_registration_requests_type ON registration_requests(request_type);
 CREATE INDEX idx_master_qr_codes_batch_id ON master_qr_codes(batch_id);
 CREATE INDEX idx_master_qr_codes_token ON master_qr_codes(master_token);
