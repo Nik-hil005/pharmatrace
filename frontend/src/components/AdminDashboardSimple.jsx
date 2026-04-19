@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react'
-import { Users, Building, Package, Clock, Bell, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Users, Building, Package, Clock, Bell, CheckCircle, XCircle, AlertTriangle, RefreshCw, Activity, ShieldAlert } from 'lucide-react'
+import { useAuth } from '../hooks/useAuth'
+
 
 function AdminDashboard() {
+  const { token } = useAuth()
   const [stats, setStats] = useState({
     totalUsers: 0,
     totalManufacturers: 0,
@@ -11,11 +14,13 @@ function AdminDashboard() {
   const [pendingRequests, setPendingRequests] = useState([])
   const [notifications, setNotifications] = useState([])
   const [showNotifications, setShowNotifications] = useState(false)
-  const [notificationIdCounter, setNotificationIdCounter] = useState(1)
+
+  const [scanRefreshing, setScanRefreshing] = useState(false)
 
   useEffect(() => {
     fetchDashboardData()
   }, [])
+
 
   const fetchDashboardData = async () => {
     try {
@@ -42,6 +47,15 @@ function AdminDashboard() {
       })
     } catch (error) {
       console.error('Error loading admin dashboard data:', error)
+    }
+  }
+
+  const handleRefreshAll = async () => {
+    setScanRefreshing(true)
+    try {
+      await fetchDashboardData()
+    } finally {
+      setScanRefreshing(false)
     }
   }
 
@@ -91,18 +105,14 @@ function AdminDashboard() {
   }
 
   const addNotification = (type, message) => {
-    setNotificationIdCounter(prev => {
-      const newId = prev + 1
-      const notification = {
-        id: newId,
-        type,
-        message,
-        timestamp: new Date(),
-        icon: type === 'success' ? CheckCircle : XCircle
-      }
-      setNotifications(notificationsPrev => [notification, ...notificationsPrev].slice(0, 5))
-      return newId
-    })
+    const notification = {
+      id: Date.now(),
+      type,
+      message,
+      timestamp: new Date(),
+      icon: type === 'success' ? CheckCircle : XCircle
+    }
+    setNotifications(notificationsPrev => [notification, ...notificationsPrev].slice(0, 5))
   }
 
   const clearNotifications = () => {
@@ -111,14 +121,37 @@ function AdminDashboard() {
 
   return (
     <div style={{ padding: '2rem', background: '#1a1a1a', minHeight: '100vh' }}>
-      <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1 style={{ color: '#2F8D46', fontSize: '2rem', marginBottom: '0.5rem' }}>
-            Admin Dashboard
-          </h1>
-          <p style={{ color: '#ccc' }}>
-            Manage manufacturer and vendor registrations
-          </p>
+      <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <div>
+            <h1 style={{ color: '#2F8D46', fontSize: '2rem', marginBottom: '0.5rem' }}>
+              Admin Dashboard
+            </h1>
+            <p style={{ color: '#ccc', margin: 0 }}>
+              Manage manufacturer and vendor registrations
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleRefreshAll}
+            disabled={scanRefreshing}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              background: '#2a2a2a',
+              border: '1px solid #2F8D46',
+              color: '#2F8D46',
+              borderRadius: '0.5rem',
+              padding: '0.6rem 1rem',
+              cursor: scanRefreshing ? 'wait' : 'pointer',
+              fontWeight: 600,
+              opacity: scanRefreshing ? 0.7 : 1
+            }}
+          >
+            <RefreshCw style={{ width: '1.1rem', height: '1.1rem' }} />
+            Refresh
+          </button>
         </div>
         
         {/* Notifications */}
@@ -294,6 +327,7 @@ function AdminDashboard() {
           <div style={{ color: '#ccc' }}>Pending Requests</div>
         </div>
       </div>
+
 
       {/* Pending Requests Section */}
       <div style={{ 

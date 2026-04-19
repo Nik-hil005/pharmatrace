@@ -351,10 +351,11 @@ router.get('/batches/:batch_id/qrcodes', async (req, res) => {
 router.get('/vendors/assignable', async (_req, res) => {
     try {
         const result = await pool.query(
-            `SELECT id, email, first_name, last_name, role
-             FROM users
-             WHERE LOWER(role) = 'vendor' AND is_active = true
-             ORDER BY first_name ASC NULLS LAST, last_name ASC NULLS LAST, email ASC`
+            `SELECT u.id, u.email, u.first_name, u.last_name, u.role, rr.company_name, rr.address AS city
+             FROM users u
+             JOIN registration_requests rr ON u.email = rr.email
+             WHERE u.role = 'Vendor' AND rr.status = 'APPROVED' AND u.is_active = true
+             ORDER BY rr.company_name ASC NULLS LAST, u.email ASC`
         );
 
         res.json({
