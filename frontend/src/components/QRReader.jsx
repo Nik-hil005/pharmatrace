@@ -23,8 +23,15 @@ function QRReader({ onScanComplete, onScanError, showCamera = true }) {
           async (result) => {
             setIsProcessing(true)
             try {
-              // Parse QR result
-              const qrData = result.data
+              const rawData = result?.data || result
+              console.log('Raw QR Data decoded (Reader):', rawData)
+
+              let qrData = null
+              try {
+                qrData = typeof rawData === 'string' ? JSON.parse(rawData) : rawData
+              } catch (e) {
+                qrData = { token: typeof rawData === 'string' ? rawData.trim() : '' }
+              }
               
               // Validate QR data
               const validation = validateMedicineQR(qrData)
@@ -49,6 +56,8 @@ function QRReader({ onScanComplete, onScanError, showCamera = true }) {
           {
             highlightScanRegion: true,
             highlightCodeOutline: true,
+            returnDetailedScanResult: true,
+            maxScansPerSecond: 10
           }
         )
         
@@ -79,13 +88,21 @@ function QRReader({ onScanComplete, onScanError, showCamera = true }) {
     setIsScanning(false)
   }, [])
 
+  const scannerInitialised = useRef(false)
+
   useEffect(() => {
     if (showCamera && videoRef.current) {
-      startCamera()
+      if (!scannerInitialised.current) {
+        scannerInitialised.current = true
+        startCamera()
+      }
     }
     
     return () => {
-      stopCamera()
+      if (scannerInitialised.current) {
+        scannerInitialised.current = false
+        stopCamera()
+      }
     }
   }, [showCamera, startCamera, stopCamera])
 

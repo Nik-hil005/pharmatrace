@@ -3,6 +3,19 @@ import { Package, Plus, Trash2, Download, Lock } from 'lucide-react'
 import { jsPDF } from 'jspdf'
 import { useAuth } from '../hooks/useAuth'
 
+// Safely parse JSON from a fetch Response — avoids "unexpected end of data" when
+// the server returns an empty body or an HTML error page.
+async function safeJson(response) {
+  const text = await response.text()
+  if (!text || text.trim() === '') return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    // Non-JSON body (e.g. HTML 502/504 from proxy) — surface a readable message.
+    throw new Error(`Server returned an unexpected response (status ${response.status}). Make sure the backend is running.`)
+  }
+}
+
 function ManufacturerDashboard() {
   const { user } = useAuth()
   const [batches, setBatches] = useState([])
@@ -15,6 +28,7 @@ function ManufacturerDashboard() {
   const [selectedVendorByBatch, setSelectedVendorByBatch] = useState({})
   const [vendorsByBatch, setVendorsByBatch] = useState({})
   const [loadingVendorsByBatch, setLoadingVendorsByBatch] = useState({})
+  const [fetchErrorByBatch, setFetchErrorByBatch] = useState({})
   const [confirmAssignModal, setConfirmAssignModal] = useState(null)
   const [batchForm, setBatchForm] = useState({
     batchNumber: '',
@@ -29,7 +43,7 @@ function ManufacturerDashboard() {
     try {
       setLoading(true)
       const response = await fetch('/api/manufacturers/batches')
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to load batches')
       }
@@ -76,7 +90,7 @@ function ManufacturerDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to create batch')
       }
@@ -107,7 +121,7 @@ function ManufacturerDashboard() {
       const response = await fetch(`/api/manufacturers/batches/${batchId}`, {
         method: 'DELETE'
       })
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to delete batch')
       }
@@ -124,7 +138,7 @@ function ManufacturerDashboard() {
 
     try {
       const response = await fetch(`/api/manufacturers/batches/${batch.id}/qrcodes`)
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch QR codes')
       }
@@ -178,17 +192,18 @@ function ManufacturerDashboard() {
     if (!batchId || loadingVendorsByBatch[batchId]) return
 
     setLoadingVendorsByBatch((prev) => ({ ...prev, [batchId]: true }))
+    setFetchErrorByBatch((prev) => ({ ...prev, [batchId]: false }))
     try {
       const primaryResponse = await fetch('/api/manufacturers/vendors/assignable')
       if (primaryResponse.ok) {
-        const primaryData = await primaryResponse.json()
+        const primaryData = await safeJson(primaryResponse)
         setVendorsByBatch((prev) => ({ ...prev, [batchId]: primaryData.vendors || [] }))
         return
       }
 
       // Fallback for backend versions that expose vendors only via /api/vendors.
       const fallbackResponse = await fetch('/api/vendors')
-      const fallbackData = await fallbackResponse.json()
+      const fallbackData = await safeJson(fallbackResponse)
       if (!fallbackResponse.ok) {
         throw new Error(fallbackData.error || 'Failed to load vendors')
       }
@@ -197,12 +212,14 @@ function ManufacturerDashboard() {
         id: vendor.id,
         first_name: vendor.name || '',
         last_name: '',
-        email: vendor.email || ''
+        email: vendor.email || '',
+        company_name: vendor.name || '',
+        city: vendor.address || ''
       }))
 
       setVendorsByBatch((prev) => ({ ...prev, [batchId]: normalizedVendors }))
     } catch (err) {
-      setError(err.message || 'Failed to load vendors')
+      setFetchErrorByBatch((prev) => ({ ...prev, [batchId]: true }))
     } finally {
       setLoadingVendorsByBatch((prev) => ({ ...prev, [batchId]: false }))
     }
@@ -246,7 +263,7 @@ function ManufacturerDashboard() {
           assigned_by: user?.id || null
         })
       })
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to assign vendor')
       }
@@ -345,35 +362,47 @@ function ManufacturerDashboard() {
                           <Lock className="lock-icon" />
                         </div>
                       ) : (
-                        <div className="assign-controls">
-                          <select
-                            className="vendor-select"
-                            value={selectedVendorByBatch[batch.id] || ''}
-                            onFocus={() => loadAssignableVendorsForBatch(batch.id)}
-                            onChange={(e) =>
-                              setSelectedVendorByBatch((prev) => ({ ...prev, [batch.id]: e.target.value }))
-                            }
-                            disabled={assigningBatchId === batch.id}
-                          >
-                            <option value="">
-                              {loadingVendorsByBatch[batch.id] ? 'Loading vendors...' : 'Select Vendor'}
-                            </option>
-                            {(vendorsByBatch[batch.id] || []).map((vendor) => {
-                              const vendorName = `${vendor.first_name || ''} ${vendor.last_name || ''}`.trim() || vendor.email
-                              return (
-                                <option key={vendor.id} value={vendor.id}>
-                                  {vendorName}
-                                </option>
-                              )
-                            })}
-                          </select>
-                          <button
-                            className="btn btn-primary btn-assign"
-                            disabled={!selectedVendorByBatch[batch.id] || assigningBatchId === batch.id}
-                            onClick={() => openAssignConfirmation(batch)}
-                          >
-                            {assigningBatchId === batch.id ? 'Assigning...' : 'Assign'}
-                          </button>
+                        <div className="assign-controls-wrapper">
+                          <div className="assign-controls">
+                            <select
+                              className="vendor-select"
+                              value={selectedVendorByBatch[batch.id] || ''}
+                              onFocus={() => loadAssignableVendorsForBatch(batch.id)}
+                              onChange={(e) =>
+                                setSelectedVendorByBatch((prev) => ({ ...prev, [batch.id]: e.target.value }))
+                              }
+                              disabled={assigningBatchId === batch.id}
+                            >
+                              <option value="">
+                                {loadingVendorsByBatch[batch.id] ? 'Loading vendors...' : 'Select Vendor'}
+                              </option>
+                              {vendorsByBatch[batch.id] && vendorsByBatch[batch.id].length === 0 && !loadingVendorsByBatch[batch.id] && !fetchErrorByBatch[batch.id] ? (
+                                <option disabled>No approved vendors found in the system.</option>
+                              ) : (
+                                (vendorsByBatch[batch.id] || []).map((vendor) => {
+                                  const displayName = vendor.company_name || vendor.name || vendor.first_name || 'Unknown Vendor'
+                                  const displayCity = vendor.city || vendor.address || vendor.last_name || 'Unknown City'
+                                  return (
+                                    <option key={vendor.id} value={vendor.id}>
+                                      {displayName} — {displayCity}
+                                    </option>
+                                  )
+                                })
+                              )}
+                            </select>
+                            <button
+                              className="btn btn-primary btn-assign"
+                              disabled={!selectedVendorByBatch[batch.id] || assigningBatchId === batch.id}
+                              onClick={() => openAssignConfirmation(batch)}
+                            >
+                              {assigningBatchId === batch.id ? 'Assigning...' : 'Assign'}
+                            </button>
+                          </div>
+                          {fetchErrorByBatch[batch.id] && (
+                            <div style={{ color: '#ff6b6b', fontSize: '0.8rem', marginTop: '4px' }}>
+                              Failed to load vendors. Please refresh.
+                            </div>
+                          )}
                         </div>
                       )}
                     </td>
