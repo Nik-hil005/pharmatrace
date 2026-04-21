@@ -12,34 +12,42 @@ function generateUniqueToken() {
 const GROUP_SIZE = 100;
 
 async function ensureBatchQrSchema() {
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS master_qr_code TEXT`);
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_vendor_id INTEGER REFERENCES users(id)`);
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activation_status VARCHAR(50) DEFAULT 'inactive'`);
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP`);
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_by INTEGER REFERENCES users(id)`);
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP`);
-    await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_by INTEGER REFERENCES users(id)`);
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS batch_groups (
-            id SERIAL PRIMARY KEY,
-            batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
-            group_number INTEGER NOT NULL,
-            unit_start INTEGER NOT NULL,
-            unit_end INTEGER NOT NULL,
-            group_qr_code TEXT NOT NULL,
-            status VARCHAR(50) DEFAULT 'inactive',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(batch_id, group_number)
-        )
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_batch_groups_batch_id ON batch_groups(batch_id)`);
-    await pool.query(`ALTER TABLE batch_groups ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'inactive'`);
-    await pool.query(
-        `ALTER TABLE batch_groups ADD COLUMN IF NOT EXISTS master_batch_id INTEGER REFERENCES batches(id) ON DELETE CASCADE`
-    );
-    await pool.query(`UPDATE batch_groups SET master_batch_id = batch_id WHERE master_batch_id IS NULL`);
+    try {
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS master_qr_code TEXT`);
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_vendor_id INTEGER REFERENCES users(id)`);
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activation_status VARCHAR(50) DEFAULT 'inactive'`);
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS activated_by INTEGER REFERENCES users(id)`);
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE batches ADD COLUMN IF NOT EXISTS assigned_by INTEGER REFERENCES users(id)`);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS batch_groups (
+                id SERIAL PRIMARY KEY,
+                batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+                group_number INTEGER NOT NULL,
+                unit_start INTEGER NOT NULL,
+                unit_end INTEGER NOT NULL,
+                group_qr_code TEXT NOT NULL,
+                status VARCHAR(50) DEFAULT 'inactive',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(batch_id, group_number)
+            )
+        `);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_batch_groups_batch_id ON batch_groups(batch_id)`);
+        await pool.query(`ALTER TABLE batch_groups ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'inactive'`);
+        await pool.query(
+            `ALTER TABLE batch_groups ADD COLUMN IF NOT EXISTS master_batch_id INTEGER REFERENCES batches(id) ON DELETE CASCADE`
+        );
+        await pool.query(`UPDATE batch_groups SET master_batch_id = batch_id WHERE master_batch_id IS NULL`);
+    } catch (schemaErr) {
+        // Log but don't throw — schema columns may already exist; the actual query will fail with a proper JSON error if DB is down.
+        console.warn('[ensureBatchQrSchema] Warning:', schemaErr.message);
+    }
 }
+
+// Run schema migrations once at startup — NOT on every request (avoids ALTER TABLE lock contention)
+ensureBatchQrSchema();
 
 // Create a new batch with units
 router.post('/batches', async (req, res) => {
@@ -61,7 +69,6 @@ router.post('/batches', async (req, res) => {
             });
         }
 
-        await ensureBatchQrSchema();
 
         // Start transaction
         await pool.query('BEGIN');
@@ -354,7 +361,7 @@ router.get('/vendors/assignable', async (_req, res) => {
             `SELECT u.id, u.email, u.first_name, u.last_name, u.role, rr.company_name, rr.address AS city
              FROM users u
              JOIN registration_requests rr ON u.email = rr.email
-             WHERE u.role = 'Vendor' AND rr.status = 'APPROVED' AND u.is_active = true
+             WHERE LOWER(u.role) = 'vendor' AND rr.status = 'APPROVED' AND u.is_active = true
              ORDER BY rr.company_name ASC NULLS LAST, u.email ASC`
         );
 

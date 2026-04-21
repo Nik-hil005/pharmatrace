@@ -3,6 +3,19 @@ import { Package, Plus, Trash2, Download, Lock } from 'lucide-react'
 import { jsPDF } from 'jspdf'
 import { useAuth } from '../hooks/useAuth'
 
+// Safely parse JSON from a fetch Response — avoids "unexpected end of data" when
+// the server returns an empty body or an HTML error page.
+async function safeJson(response) {
+  const text = await response.text()
+  if (!text || text.trim() === '') return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    // Non-JSON body (e.g. HTML 502/504 from proxy) — surface a readable message.
+    throw new Error(`Server returned an unexpected response (status ${response.status}). Make sure the backend is running.`)
+  }
+}
+
 function ManufacturerDashboard() {
   const { user } = useAuth()
   const [batches, setBatches] = useState([])
@@ -30,7 +43,7 @@ function ManufacturerDashboard() {
     try {
       setLoading(true)
       const response = await fetch('/api/manufacturers/batches')
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to load batches')
       }
@@ -77,7 +90,7 @@ function ManufacturerDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to create batch')
       }
@@ -108,7 +121,7 @@ function ManufacturerDashboard() {
       const response = await fetch(`/api/manufacturers/batches/${batchId}`, {
         method: 'DELETE'
       })
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to delete batch')
       }
@@ -125,7 +138,7 @@ function ManufacturerDashboard() {
 
     try {
       const response = await fetch(`/api/manufacturers/batches/${batch.id}/qrcodes`)
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch QR codes')
       }
@@ -183,14 +196,14 @@ function ManufacturerDashboard() {
     try {
       const primaryResponse = await fetch('/api/manufacturers/vendors/assignable')
       if (primaryResponse.ok) {
-        const primaryData = await primaryResponse.json()
+        const primaryData = await safeJson(primaryResponse)
         setVendorsByBatch((prev) => ({ ...prev, [batchId]: primaryData.vendors || [] }))
         return
       }
 
       // Fallback for backend versions that expose vendors only via /api/vendors.
       const fallbackResponse = await fetch('/api/vendors')
-      const fallbackData = await fallbackResponse.json()
+      const fallbackData = await safeJson(fallbackResponse)
       if (!fallbackResponse.ok) {
         throw new Error(fallbackData.error || 'Failed to load vendors')
       }
@@ -250,7 +263,7 @@ function ManufacturerDashboard() {
           assigned_by: user?.id || null
         })
       })
-      const data = await response.json()
+      const data = await safeJson(response)
       if (!response.ok) {
         throw new Error(data.error || 'Failed to assign vendor')
       }

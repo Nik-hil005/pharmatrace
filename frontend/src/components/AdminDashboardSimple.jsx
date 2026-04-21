@@ -1,19 +1,22 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Users, Building, Package, Clock, Bell, CheckCircle, XCircle, AlertTriangle, RefreshCw, Activity, ShieldAlert } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
-
+import { apiJson, authHeadersJson } from '../utils/api'
 
 function AdminDashboard() {
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const [stats, setStats] = useState({
     totalUsers: 0,
     totalManufacturers: 0,
     totalVendors: 0,
     pendingRequests: 0
   })
+  /** Pending rows from `applications` (vendor/manufacturer apply forms), not `registration_requests`. */
   const [pendingRequests, setPendingRequests] = useState([])
   const [notifications, setNotifications] = useState([])
   const [showNotifications, setShowNotifications] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [dashboardLoading, setDashboardLoading] = useState(true)
 
   const [scanRefreshing, setScanRefreshing] = useState(false)
 
@@ -23,31 +26,65 @@ function AdminDashboard() {
 
 
   const fetchDashboardData = async () => {
+    setLoadError('')
+    setDashboardLoading(true)
+    let manufacturers = []
+    let vendors = []
+    let pendingApps = []
+    let pendingCount = 0
+
     try {
-      const [requestsRes, manufacturersRes, vendorsRes] = await Promise.all([
-        fetch('/api/registration/requests?status=PENDING'),
-        fetch('/api/manufacturers'),
-        fetch('/api/vendors')
-      ])
-
-      const requestsData = await requestsRes.json()
-      const manufacturersData = await manufacturersRes.json()
-      const vendorsData = await vendorsRes.json()
-
-      const requests = requestsData.requests || []
-      const manufacturers = manufacturersData.manufacturers || []
-      const vendors = vendorsData.vendors || []
-
-      setPendingRequests(requests)
-      setStats({
-        totalUsers: manufacturers.length + vendors.length,
-        totalManufacturers: manufacturers.length,
-        totalVendors: vendors.length,
-        pendingRequests: requests.length
+      const appsPayload = await apiJson('/api/applications/pending', {
+        headers: authHeadersJson(token)
       })
+      if (!appsPayload.success || !Array.isArray(appsPayload.applications)) {
+        const msg = appsPayload?.error || 'Invalid response shape from /api/applications/pending'
+        console.error('Admin pending applications:', msg, appsPayload)
+        setLoadError(msg)
+      } else {
+        pendingApps = appsPayload.applications
+        pendingCount = pendingApps.length
+      }
     } catch (error) {
-      console.error('Error loading admin dashboard data:', error)
+      console.error('Error loading pending applications:', error)
+      setLoadError(error.message || 'Failed to load pending applications')
     }
+
+    try {
+      const statsPayload = await apiJson('/api/applications/stats', {
+        headers: authHeadersJson(token)
+      })
+      if (statsPayload.success && statsPayload.stats) {
+        pendingCount = Number(statsPayload.stats.pending_applications) || pendingCount
+      }
+    } catch (error) {
+      console.warn('Application stats unavailable:', error.message)
+    }
+
+    try {
+      const manufacturersData = await apiJson('/api/manufacturers')
+      manufacturers = manufacturersData.manufacturers || manufacturersData || []
+      if (!Array.isArray(manufacturers)) manufacturers = []
+    } catch (error) {
+      console.warn('Manufacturers list unavailable:', error.message)
+    }
+
+    try {
+      const vendorsData = await apiJson('/api/vendors')
+      vendors = vendorsData.vendors || vendorsData || []
+      if (!Array.isArray(vendors)) vendors = []
+    } catch (error) {
+      console.warn('Vendors list unavailable:', error.message)
+    }
+
+    setPendingRequests(pendingApps)
+    setStats({
+      totalUsers: manufacturers.length + vendors.length,
+      totalManufacturers: manufacturers.length,
+      totalVendors: vendors.length,
+      pendingRequests: pendingCount
+    })
+    setDashboardLoading(false)
   }
 
   const handleRefreshAll = async () => {
@@ -60,45 +97,63 @@ function AdminDashboard() {
   }
 
   const handleApproveRequest = async (requestId) => {
-    const request = pendingRequests.find(req => req.id === requestId)
+    const request = pendingRequests.find((req) => req.id === requestId)
     if (!request) return
 
-    try {
-      const response = await fetch(`/api/registration/requests/${requestId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      })
-      const data = await response.json()
+    const adminId = user?.id
+    if (adminId == null) {
+      const msg = 'Your session has no user id. Log in with a real admin account to approve applications.'
+      addNotification('error', msg)
+      console.error(msg)
+      return
+    }
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Approval failed')
-      }
+    try {
+      await apiJson(`/api/applications/${requestId}/accept`, {
+        method: 'POST',
+        headers: authHeadersJson(token),
+        body: JSON.stringify({ adminId })
+      })
 
       await fetchDashboardData()
-      addNotification('success', `Approved ${request.request_type.toLowerCase()} application for ${request.company_name}`)
+      addNotification(
+        'success',
+        `Approved ${(request.role || 'account').toLowerCase()} application for ${request.company_name}`
+      )
     } catch (error) {
       addNotification('error', error.message || 'Failed to approve application')
     }
   }
 
   const handleRejectRequest = async (requestId) => {
-    const request = pendingRequests.find(req => req.id === requestId)
+    const request = pendingRequests.find((req) => req.id === requestId)
     if (!request) return
 
-    try {
-      const response = await fetch(`/api/registration/requests/${requestId}/reject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      })
-      const data = await response.json()
+    const adminId = user?.id
+    if (adminId == null) {
+      const msg = 'Your session has no user id. Log in with a real admin account to reject applications.'
+      addNotification('error', msg)
+      console.error(msg)
+      return
+    }
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Rejection failed')
-      }
+    const reason = window.prompt('Rejection reason (required):', 'Does not meet registration criteria')
+    if (reason == null || !String(reason).trim()) {
+      return
+    }
+
+    try {
+      await apiJson(`/api/applications/${requestId}/reject`, {
+        method: 'POST',
+        headers: authHeadersJson(token),
+        body: JSON.stringify({ adminId, rejectionReason: String(reason).trim() })
+      })
 
       await fetchDashboardData()
-      addNotification('error', `Rejected ${request.request_type.toLowerCase()} application for ${request.company_name}`)
+      addNotification(
+        'success',
+        `Rejected ${(request.role || 'account').toLowerCase()} application for ${request.company_name}`
+      )
     } catch (error) {
       addNotification('error', error.message || 'Failed to reject application')
     }
@@ -329,7 +384,26 @@ function AdminDashboard() {
       </div>
 
 
-      {/* Pending Requests Section */}
+      {loadError && (
+        <div
+          style={{
+            background: 'rgba(220, 53, 69, 0.15)',
+            border: '1px solid #dc3545',
+            borderRadius: '0.5rem',
+            padding: '1rem 1.25rem',
+            marginBottom: '1.5rem',
+            color: '#ffb4b4'
+          }}
+        >
+          <strong>Could not load applications:</strong> {loadError}
+          <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#ccc' }}>
+            Check the browser console for HTTP status and response. Ensure the API is reachable
+            (Vite proxy to backend or set <code style={{ color: '#2F8D46' }}>VITE_API_URL</code>).
+          </div>
+        </div>
+      )}
+
+      {/* Pending applications from `applications` table (/api/applications/submit) */}
       <div style={{ 
         background: '#2a2a2a', 
         border: '1px solid #2F8D46', 
@@ -337,17 +411,19 @@ function AdminDashboard() {
         padding: '2rem'
       }}>
         <h2 style={{ color: '#2F8D46', marginBottom: '1.5rem' }}>
-          Pending Registration Requests
+          Pending registration applications
         </h2>
-        
-        {pendingRequests.length === 0 ? (
+
+        {dashboardLoading ? (
+          <p style={{ color: '#ccc', textAlign: 'center', padding: '2rem' }}>Loading applications…</p>
+        ) : pendingRequests.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '2rem' }}>
             <AlertTriangle style={{ color: '#ffc107', width: '3rem', height: '3rem', marginBottom: '1rem' }} />
             <p style={{ color: '#ccc', fontSize: '1.1rem' }}>
-              No pending registration requests
+              No pending applications
             </p>
             <p style={{ color: '#999', marginTop: '0.5rem' }}>
-              When manufacturers or vendors register, their requests will appear here for approval.
+              Submissions from <strong>/apply/vendor</strong> and <strong>/apply/manufacturer</strong> appear here.
             </p>
           </div>
         ) : (
@@ -368,16 +444,28 @@ function AdminDashboard() {
                       {request.company_name}
                     </h3>
                     <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
-                      <strong>Type:</strong> {request.request_type}
+                      <strong>Applicant:</strong> {request.full_name}
+                    </p>
+                    <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
+                      <strong>Role:</strong>{' '}
+                      {request.role ? String(request.role).charAt(0).toUpperCase() + String(request.role).slice(1) : '—'}
                     </p>
                     <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
                       <strong>Email:</strong> {request.email}
                     </p>
+                    {request.city ? (
+                      <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
+                        <strong>City:</strong> {request.city}
+                      </p>
+                    ) : null}
                     <p style={{ color: '#ccc', margin: '0 0 0.25rem 0' }}>
                       <strong>License:</strong> {request.license_number}
                     </p>
                     <p style={{ color: '#ccc', margin: '0' }}>
-                      <strong>Submitted:</strong> {new Date(request.created_at).toLocaleDateString()}
+                      <strong>Submitted:</strong>{' '}
+                      {request.submitted_at
+                        ? new Date(request.submitted_at).toLocaleString()
+                        : '—'}
                     </p>
                   </div>
                   

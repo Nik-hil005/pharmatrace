@@ -199,12 +199,12 @@ router.get('/stats', async (req, res) => {
     try {
         const query = `
             SELECT 
-                COUNT(*) as total_applications,
-                COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_applications,
-                COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_applications,
-                COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_applications,
-                COUNT(CASE WHEN status = 'vendor' THEN 1 END) as vendor_applications,
-                COUNT(CASE WHEN status = 'manufacturer' THEN 1 END) as manufacturer_applications
+                COUNT(*)::int AS total_applications,
+                COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_applications,
+                COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_applications,
+                COUNT(*) FILTER (WHERE status = 'rejected')::int AS rejected_applications,
+                COUNT(*) FILTER (WHERE role = 'vendor')::int AS vendor_applications,
+                COUNT(*) FILTER (WHERE role = 'manufacturer')::int AS manufacturer_applications
             FROM applications
         `;
         

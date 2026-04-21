@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Building, User, Mail, Phone, FileText, Calendar, CheckCircle, XCircle, Clock, TrendingUp, Users, MapPin } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
+import { apiJson, authHeadersJson } from '../utils/api'
 
 function ApplicationReview() {
-  const { user } = useAuth()
+  const { user, token } = useAuth()
   const [applications, setApplications] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -17,17 +18,23 @@ function ApplicationReview() {
   const fetchApplications = async () => {
     try {
       setLoading(true)
-      const response = await fetch('/api/applications/pending')
-      const data = await response.json()
-      
-      if (data.success) {
+      setError('')
+      const data = await apiJson('/api/applications/pending', {
+        headers: authHeadersJson(token)
+      })
+
+      if (data.success && Array.isArray(data.applications)) {
         setApplications(data.applications)
       } else {
-        setError(data.error || 'Failed to fetch applications')
+        const msg = data?.error || 'Unexpected response from /api/applications/pending'
+        console.error('fetchApplications:', msg, data)
+        setError(msg)
+        setApplications([])
       }
     } catch (err) {
-      console.error('Error fetching applications:', err)
-      setError('Network error. Please try again.')
+      console.error('Error fetching applications:', err.status, err.message, err.body)
+      setError(err.message || 'Network error. Please try again.')
+      setApplications([])
     } finally {
       setLoading(false)
     }
@@ -35,14 +42,15 @@ function ApplicationReview() {
 
   const fetchStats = async () => {
     try {
-      const response = await fetch('/api/applications/stats')
-      const data = await response.json()
-      
-      if (data.success) {
+      const data = await apiJson('/api/applications/stats', {
+        headers: authHeadersJson(token)
+      })
+
+      if (data.success && data.stats) {
         setStats(data.stats)
       }
     } catch (err) {
-      console.error('Error fetching stats:', err)
+      console.error('Error fetching stats:', err.status, err.message, err.body)
     }
   }
 
@@ -56,19 +64,18 @@ function ApplicationReview() {
       return
     }
 
+    if (user?.id == null) {
+      alert('Missing admin user id. Log in again with a valid admin account.')
+      return
+    }
+
     try {
-      const response = await fetch(`/api/applications/${applicationId}/accept`, {
+      const result = await apiJson(`/api/applications/${applicationId}/accept`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          adminId: user.id
-        })
+        headers: authHeadersJson(token),
+        body: JSON.stringify({ adminId: user.id })
       })
 
-      const result = await response.json()
-      
       if (result.success) {
         alert(
           result.message ||
@@ -80,31 +87,32 @@ function ApplicationReview() {
         alert(result.error || 'Failed to approve application')
       }
     } catch (err) {
-      console.error('Error approving application:', err)
-      alert('Network error. Please try again.')
+      console.error('Error approving application:', err.status, err.message, err.body)
+      alert(err.message || 'Request failed. Please try again.')
     }
   }
 
   const handleReject = async (applicationId) => {
     const reason = prompt('Please provide rejection reason:')
-    if (!reason) {
+    if (reason == null || !String(reason).trim()) {
+      return
+    }
+
+    if (user?.id == null) {
+      alert('Missing admin user id. Log in again with a valid admin account.')
       return
     }
 
     try {
-      const response = await fetch(`/api/applications/${applicationId}/reject`, {
+      const result = await apiJson(`/api/applications/${applicationId}/reject`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeadersJson(token),
         body: JSON.stringify({
           adminId: user.id,
-          rejectionReason: reason
+          rejectionReason: String(reason).trim()
         })
       })
 
-      const result = await response.json()
-      
       if (result.success) {
         alert('Application rejected successfully')
         fetchApplications()
@@ -113,8 +121,8 @@ function ApplicationReview() {
         alert(result.error || 'Failed to reject application')
       }
     } catch (err) {
-      console.error('Error rejecting application:', err)
-      alert('Network error. Please try again.')
+      console.error('Error rejecting application:', err.status, err.message, err.body)
+      alert(err.message || 'Request failed. Please try again.')
     }
   }
 
